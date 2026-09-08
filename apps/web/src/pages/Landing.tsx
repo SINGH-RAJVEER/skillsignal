@@ -54,7 +54,7 @@ export const Landing = () => {
 		<main className="public-page">
 			<header className="public-header">
 				<div className="brand-mark">
-					<img src="/icon.webp" alt="SkillSignal" />
+					<img src="/icon.webp" alt="Skill Signal" />
 				</div>
 				<nav>
 					<Link to="/sign-in">Sign in</Link>

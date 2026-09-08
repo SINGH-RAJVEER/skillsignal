@@ -23,5 +23,5 @@ if (config.retentionSweepIntervalSeconds > 0) {
 }
 
 const port = Number(Bun.env["PORT"] ?? 8000);
-console.log(`SkillSignal API listening on ${port}`);
+console.log(`Skill Signal API listening on ${port}`);
 Bun.serve({ port, fetch: app.fetch });

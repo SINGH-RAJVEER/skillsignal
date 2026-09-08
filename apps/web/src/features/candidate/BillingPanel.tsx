@@ -88,7 +88,7 @@ export const PackPurchase = ({
 				orderId: order.razorpayOrderId,
 				amountPaise: order.amountInr * 100,
 				currency: order.currency,
-				name: "SkillSignal points",
+				name: "Skill Signal points",
 				description: `${order.points} points`,
 				handler: async (response) => {
 					try {

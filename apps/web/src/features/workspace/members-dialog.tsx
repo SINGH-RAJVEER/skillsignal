@@ -123,7 +123,7 @@ export const MembersDialog = ({
 				orderId: order.razorpayOrderId,
 				amountPaise: order.amountInr * 100,
 				currency: order.currency,
-				name: "SkillSignal organization points",
+				name: "Skill Signal organization points",
 				description: `${order.points} points`,
 				handler: async (response) => {
 					try {

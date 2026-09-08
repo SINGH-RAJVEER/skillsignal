@@ -19,7 +19,7 @@ export const CandidateHome = () => {
 		<main className="candidate-page">
 			<header className="candidate-header">
 				<div className="brand-mark">
-					<img src="/icon.webp" alt="SkillSignal" />
+					<img src="/icon.webp" alt="Skill Signal" />
 				</div>
 				<div>
 					<span>{session?.user.name}</span>

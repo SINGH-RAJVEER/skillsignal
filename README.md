@@ -1,4 +1,4 @@
-# SkillSignal
+# Skill Signal
 
 A resume screening tool with two sides that never mix. Candidates run private
 checks on their own resumes and get a readiness score, suggestions, and a

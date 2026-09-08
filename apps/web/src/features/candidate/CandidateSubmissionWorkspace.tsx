@@ -111,7 +111,7 @@ export const CandidateSubmissionWorkspace = () => {
 					<code>{receipt.submissionId}</code>
 					<p className="receipt-privacy">
 						This receipt does not show the employer's evaluation,
-						eligibility result, or review decision. SkillSignal will
+						eligibility result, or review decision. Skill Signal will
 						not send interview or rejection messages for the
 						employer.
 					</p>
