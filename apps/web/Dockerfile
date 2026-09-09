@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM oven/bun:1-alpine AS builder
+FROM docker.io/oven/bun:1-alpine AS builder
 WORKDIR /app
 
 COPY package.json bun.lock* ./
@@ -22,7 +22,7 @@ ENV VITE_ENTERPRISE_SALES_EMAIL=$VITE_ENTERPRISE_SALES_EMAIL
 WORKDIR /app/apps/web
 RUN bun run build
 
-FROM nginx:1.29-alpine
+FROM docker.io/library/nginx:1.29-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 
