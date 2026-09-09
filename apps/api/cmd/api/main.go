@@ -1,8 +1,7 @@
 // Command api serves the SkillSignal HTTP API.
 //
-// Scaffold status: health and middleware are live. Domain routes under /api/
-// return 503 with the contract error envelope until each group is ported
-// from the Python implementation (auth, jobs, resumes, billing, demo, admin).
+// Usage: api serve (default) runs the server; api migrate applies pending
+// SQL migrations and exits, mirroring migrate.py upgrade head.
 package main
 
 import (
@@ -15,8 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/skillsignal/go-core/config"
+	"github.com/skillsignal/go-core/db"
 	"github.com/skillsignal/go-core/httpx"
+
+	"github.com/skillsignal/api/internal/migrate"
 )
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
@@ -44,10 +48,36 @@ func retentionSweepLoop(ctx context.Context, intervalSeconds int) {
 	}
 }
 
+func runMigrate(settings config.Settings) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, db.NormalizeURL(settings.DatabaseURL))
+	if err != nil {
+		log.Fatalf("migrate: connect: %v", err)
+	}
+	defer conn.Close(ctx)
+	if err := migrate.Up(ctx, conn); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
+	log.Print("migrate: up to date")
+}
+
 func main() {
 	settings, err := config.Load()
 	if err != nil {
 		log.Fatalf("invalid configuration: %v", err)
+	}
+
+	command := "serve"
+	if len(os.Args) > 1 {
+		command = os.Args[1]
+	}
+	if command == "migrate" {
+		runMigrate(settings)
+		return
+	}
+	if command != "serve" {
+		log.Fatalf("unknown command %q (want serve or migrate)", command)
 	}
 
 	mux := http.NewServeMux()
