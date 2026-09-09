@@ -43,15 +43,20 @@ const duration = (value: string): number => {
 };
 
 export const loadConfig = (): ServerConfig => {
-	const jwtSecret = required("JWT_SECRET");
-	if (jwtSecret.length < 32) throw new Error("JWT_SECRET must be at least 32 characters");
+	let jwtSecret: string | undefined;
 	const list = (name: string, fallback: string): string[] =>
 		(Bun.env[name] ?? fallback).split(",").map((item) => item.trim()).filter(Boolean);
 	return {
 		databaseUrl: Bun.env["DATABASE_URL"] ?? "postgres://postgres:password@localhost:5432/skillsignal",
 		storageRoot: Bun.env["STORAGE_ROOT"] ?? ".local-storage",
 		webUrl: Bun.env["WEB_URL"] ?? "http://localhost:3000",
-		jwtSecret,
+		get jwtSecret(): string {
+			if (jwtSecret === undefined) {
+				jwtSecret = required("JWT_SECRET");
+				if (jwtSecret.length < 32) throw new Error("JWT_SECRET must be at least 32 characters");
+			}
+			return jwtSecret;
+		},
 		jwtTtlSeconds: duration(Bun.env["JWT_TTL"] ?? "168h"),
 		retentionSweepIntervalSeconds: integer("RETENTION_SWEEP_INTERVAL_SECONDS", 3600),
 		workerPollIntervalSeconds: integer("WORKER_POLL_INTERVAL_SECONDS", 2),
