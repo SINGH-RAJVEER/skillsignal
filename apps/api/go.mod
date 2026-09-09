@@ -1,6 +1,6 @@
 module github.com/skillsignal/api
 
-go 1.24.0
+go 1.26.0
 
 require github.com/skillsignal/go-core v0.0.0
 
