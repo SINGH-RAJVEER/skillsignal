@@ -12,10 +12,12 @@ let
 		in if value == "" then "3000" else value;
 
 	# DATABASE_URL is assembled at process start from PGHOST/PGPORT because
-	# devenv resolves the postgres port per invocation when 5432 is busy. The
-	# +asyncpg scheme is required by the worker and accepted by the API.
+	# devenv resolves the postgres port per invocation when 5432 is busy.
 	processDbUrl =
-		"export DATABASE_URL=\"postgresql+asyncpg://postgres:password@\$PGHOST:\$PGPORT/skillsignal\"";
+		"export DATABASE_URL=\"postgresql://postgres:password@\$PGHOST:\$PGPORT/skillsignal\"";
+
+	# Compiled Go binaries live in devenv state, outside the source tree.
+	binDir = "${config.devenv.root}/.devenv/state/go";
 in
 {
 	dotenv.disableHint = true;
@@ -26,14 +28,8 @@ in
 		bun.install.enable = true;
 	};
 
-	# Python is managed by uv (per-project .venv in apps/api and apps/worker);
-	# providing the interpreter on PATH keeps uv from downloading its own.
-	# libstdc++ is needed by manylinux wheels such as greenlet on NixOS.
-	packages = [
-		pkgs.python314
-		pkgs.uv
-		pkgs.stdenv.cc.cc.lib
-	];
+	# The API and worker are Go modules joined by go.work at the repo root.
+	languages.go.enable = true;
 
 	services.postgres = {
 		enable = true;
@@ -53,20 +49,27 @@ in
 		STORAGE_ROOT = "${config.devenv.root}/.local-storage";
 		WEB_URL = "http://localhost:${webPort}";
 		VITE_API_URL = "http://localhost:${apiPort}";
-		LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
+		# Nothing in the Go tree needs cgo, and NixOS has no default gcc on PATH.
+		CGO_ENABLED = "0";
 	};
 
 	processes.api = {
+		# The binary is built and exec'd rather than run through `go run`,
+		# which forks the compiled binary as a child and leaves it orphaned
+		# holding the port when process-compose stops the wrapper.
 		exec = lib.concatStringsSep "\n" [
 			processDbUrl
+			"export PORT=${apiPort}"
+			"mkdir -p ${binDir}"
+			"go build -o ${binDir}/api ./cmd/api"
 			# Same boot sequence as apps/api/Dockerfile: migrate, then serve.
-			''.venv/bin/python migrate.py upgrade head && exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port ${apiPort} --reload''
+			"${binDir}/api migrate && exec ${binDir}/api serve"
 		];
 		cwd = "${config.devenv.root}/apps/api";
 		after = [ "devenv:processes:postgres@ready" ];
-		# Migrations run before uvicorn binds; allow a few minutes of boot time.
+		# The first run compiles the module; allow a few minutes of boot time.
 		ready.http.get.port = lib.toInt apiPort;
-		ready.http.get.path = "/health";
+		ready.http.get.path = "/healthz";
 		ready.period = 3;
 		ready.probe_timeout = 2;
 		ready.failure_threshold = 60;
@@ -75,7 +78,9 @@ in
 	processes.worker = {
 		exec = lib.concatStringsSep "\n" [
 			processDbUrl
-			"exec .venv/bin/python -m worker.main"
+			"mkdir -p ${binDir}"
+			"go build -o ${binDir}/worker ./cmd/worker"
+			"exec ${binDir}/worker"
 		];
 		cwd = "${config.devenv.root}/apps/worker";
 		# Wait for the API so migrations have created the job tables.
@@ -83,17 +88,20 @@ in
 	};
 
 	processes.web = {
-		exec = "exec bun run dev --strictPort --port ${webPort}";
+		# vite is exec'd directly rather than via `bun run dev`: the bun wrapper
+		# forks vite as a child, so a stop signal leaves it holding the port and
+		# every restart then fails with "Port ${webPort} is already in use".
+		# vite binds [::1] only, and localhost resolves to ::1 here, so the
+		# readiness probe below must target [::1] rather than the IPv4 default.
+		exec = "exec node_modules/.bin/vite --strictPort --port ${webPort}";
 		cwd = "${config.devenv.root}/apps/web";
+		ready.http.get.host = "[::1]";
 		ready.http.get.port = lib.toInt webPort;
 		ready.http.get.path = "/";
 	};
 
 	enterShell = ''
-		uv sync --project "$DEVENV_ROOT/apps/api"
-		uv sync --project "$DEVENV_ROOT/apps/worker"
-
-		export DATABASE_URL="postgresql+asyncpg://postgres:password@$PGHOST:$PGPORT/skillsignal"
+		export DATABASE_URL="postgresql://postgres:password@$PGHOST:$PGPORT/skillsignal"
 
 		# Local secrets (.env, gitignored) feed optional integrations such as
 		# OpenRouter and Razorpay. Existing variables win so the preview keeps
@@ -110,7 +118,7 @@ in
 
 	infoSections."developer preview" = [
 		"web      http://localhost:${webPort}"
-		"api      http://localhost:${apiPort}/health"
+		"api      http://localhost:${apiPort}/healthz"
 		"postgres psql --dbname skillsignal --username postgres (uses $PGHOST/$PGPORT)"
 	];
 }
