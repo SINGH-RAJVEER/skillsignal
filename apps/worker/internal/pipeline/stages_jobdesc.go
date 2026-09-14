@@ -10,7 +10,7 @@ import (
 
 	"github.com/skillsignal/go-core/versions"
 	"github.com/skillsignal/worker/internal/compiler"
-	"github.com/skillsignal/worker/internal/docparse"
+	parser "github.com/skillsignal/worker/internal/docparse"
 	"github.com/skillsignal/worker/internal/modelschemas"
 	"github.com/skillsignal/worker/internal/openrouter"
 	"github.com/skillsignal/worker/internal/prompts"
@@ -104,7 +104,7 @@ func extractTextBounded(content []byte, mediaType string, timeout time.Duration)
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		doc, err := docparse.ExtractBlocks(content, mediaType)
+		doc, err := parser.ExtractBlocks(content, mediaType)
 		if err != nil {
 			done <- outcome{err: err}
 			return
@@ -122,7 +122,7 @@ func extractTextBounded(content []byte, mediaType string, timeout time.Duration)
 	select {
 	case result := <-done:
 		if result.err != nil {
-			if parseErr, ok := result.err.(*docparse.ParseError); ok {
+			if parseErr, ok := result.err.(*parser.ParseError); ok {
 				return "", &NonRetryableError{Message: parseErr.Message}
 			}
 			return "", result.err

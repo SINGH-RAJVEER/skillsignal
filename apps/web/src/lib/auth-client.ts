@@ -146,7 +146,7 @@ const authenticate = async (
 const authenticateWithBody = async (
 	path: string,
 	body: unknown,
-): Promise<Result<AuthResponse>> => {
+): Promise<AuthResult<AuthResponse>> => {
 	const result = await request<AuthResponse>(path, {
 		method: "POST",
 		body: JSON.stringify(body),

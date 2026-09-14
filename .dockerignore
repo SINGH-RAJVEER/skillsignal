@@ -1,0 +1,11 @@
+.git
+.jj
+.devenv
+.env
+.env.*
+**/.venv
+**/node_modules
+**/dist
+**/.local-storage
+**/*.pyc
+__pycache__

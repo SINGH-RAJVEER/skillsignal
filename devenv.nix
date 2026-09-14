@@ -31,6 +31,16 @@ in
 	# The API and worker are Go modules joined by go.work at the repo root.
 	languages.go.enable = true;
 
+	scripts.go-build.exec = ''
+		go build ./apps/api/cmd/api ./apps/worker/cmd/worker
+	'';
+	scripts.go-test.exec = ''
+		CGO_ENABLED=0 go test ./libs/go-core/... ./apps/api/... ./apps/worker/...
+	'';
+	scripts.go-migrate.exec = ''
+		go run ./apps/api/cmd/api migrate
+	'';
+
 	services.postgres = {
 		enable = true;
 		package = pkgs.postgresql_18;

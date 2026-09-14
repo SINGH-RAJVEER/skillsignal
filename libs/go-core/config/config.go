@@ -1,10 +1,5 @@
 // Package config loads service settings from the environment.
-//
-// It mirrors the Python service configuration: DATABASE_URL with a
-// DATABASE_HOST/PORT/NAME/USER/PASSWORD fallback, WebURL origin guard,
-// JWT credentials, storage and retention settings, point economics, and
-// worker polling/OpenRouter knobs. Values come only from the environment
-// so container wiring in docker-compose.yml keeps working unchanged.
+// It mirrors the Python service configuration: DATABASE_URL with a DATABASE_HOST/PORT/NAME/USER/PASSWORD fallback, WebURL origin guard, JWT credentials, storage and retention settings, point economics, and worker polling/OpenRouter knobs. Values come only from the environment so container wiring in docker-compose.yml keeps working unchanged.
 package config
 
 import (

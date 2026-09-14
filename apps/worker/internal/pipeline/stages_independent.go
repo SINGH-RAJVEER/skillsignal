@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/skillsignal/go-core/versions"
-	"github.com/skillsignal/worker/internal/docparse"
+	parser "github.com/skillsignal/worker/internal/docparse"
 	"github.com/skillsignal/worker/internal/extractor"
 	"github.com/skillsignal/worker/internal/independent"
 	"github.com/skillsignal/worker/internal/modelschemas"
@@ -34,9 +34,12 @@ func (w *Worker) processIndependentEvaluation(ctx context.Context, job *ClaimedJ
 		`UPDATE independent_evaluation
 		 SET status = 'processing', safe_error = NULL
 		 WHERE id = $1
+		   AND EXISTS (
+		       SELECT 1 FROM processing_job
+		       WHERE id = $2 AND lease_token = $3 AND lease_expires_at > now())
 		 RETURNING storage_key, media_type, original_name, job_description,
 		           job_description_key, job_description_media_type`,
-		job.PayloadReference).Scan(
+		job.PayloadReference, job.ID, job.LeaseToken).Scan(
 		&storageKey, &mediaType, &originalName,
 		&jobDescription, &descriptionKey, &descriptionMediaType)
 	if err == pgx.ErrNoRows {
@@ -56,7 +59,7 @@ func (w *Worker) processIndependentEvaluation(ctx context.Context, job *ClaimedJ
 	}
 	doc, _, normalizedFacts, err := prepareDocumentBounded(content, mediaType, w.parseTimeout())
 	if err != nil {
-		if parseErr, ok := err.(*docparse.ParseError); ok {
+		if parseErr, ok := err.(*parser.ParseError); ok {
 			return &NonRetryableError{Message: parseErr.Message}
 		}
 		return err

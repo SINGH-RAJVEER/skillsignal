@@ -51,8 +51,8 @@ intended product.
 
 ```
 apps/
-	api/     FastAPI service. Auth, organizations, jobs, uploads,
-	         invitations, evaluation queries, CSV export. Runs Alembic
+	api/     Go HTTP service. Auth, organizations, jobs, uploads,
+	         invitations, evaluation queries, CSV export. Runs SQL
 	         migrations at container start.
 	worker/  Queue worker. Claims processing_job rows with FOR UPDATE SKIP
 	         LOCKED, parses documents, matches skills against a corpus,
@@ -93,20 +93,22 @@ ADMIN_TOKEN=some-admin-token
 docker compose up --build
 ```
 
-The API container applies migrations on startup. When everything is up:
+The API container applies SQL migrations on startup. The API and worker run as
+separate images and share the private storage volume. When everything is up:
 web at http://localhost:3000, API at http://localhost:8000 (health check at
-`/health`). Uploaded files live in the `resume_storage` volume; the worker
+`/healthz`). Uploaded files live in the `resume_storage` volume; the worker
 mounts it read-write because it renders corrected resumes back into storage.
 
 ## Run locally
 
-Assumes a running PostgreSQL server you can point at, plus [uv](https://docs.astral.sh/uv/)
-and [bun](https://bun.sh).
+Assumes a running PostgreSQL server you can point at, plus [bun](https://bun.sh)
+and Go 1.26. `devenv up` provisions PostgreSQL and starts the Go API, worker,
+and Vite processes together.
 
 1. Create a database, then export connection settings:
 
 ```sh
-export DATABASE_URL="postgresql+asyncpg://postgres:password@localhost:5432/skillsignal"
+export DATABASE_URL="postgresql://postgres:password@localhost:5432/skillsignal"
 export JWT_SECRET="some-secret-at-least-32-characters-long"
 export STORAGE_ROOT=".local-storage"
 export OPENROUTER_API_KEY="sk-or-..."   # optional
@@ -117,18 +119,14 @@ export OPENROUTER_API_KEY="sk-or-..."   # optional
 2. API, in one terminal:
 
 ```sh
-cd apps/api
-uv sync
-uv run python migrate.py upgrade head   # alembic, with a Python 3.14 fix applied
-bun dev        # uvicorn on :8000 with reload
+go run ./apps/api/cmd/api migrate
+go run ./apps/api/cmd/api serve
 ```
 
 3. Worker, in a second terminal:
 
 ```sh
-cd apps/worker
-uv sync
-uv run python -m worker.main
+go run ./apps/worker/cmd/worker
 ```
 
 4. Web, in a third terminal:
@@ -145,8 +143,9 @@ candidate to run private checks.
 ## Tests
 
 ```sh
-cd apps/api && bun test      # pytest via uv
-cd apps/worker && bun test   # pytest via uv
+CGO_ENABLED=0 go test ./libs/go-core/...
+CGO_ENABLED=0 go test ./apps/api/...
+CGO_ENABLED=0 go test ./apps/worker/...
 ```
 
 Or `bun test` at the repo root for both. The web app has no unit tests yet;

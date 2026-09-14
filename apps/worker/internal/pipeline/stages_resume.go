@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/skillsignal/go-core/versions"
-	"github.com/skillsignal/worker/internal/docparse"
+	parser "github.com/skillsignal/worker/internal/docparse"
 	"github.com/skillsignal/worker/internal/extractor"
 	"github.com/skillsignal/worker/internal/modelschemas"
 	"github.com/skillsignal/worker/internal/openrouter"
@@ -38,7 +38,7 @@ func (w *Worker) processResume(ctx context.Context, job *ClaimedJob) error {
 	doc, _, normalizedFacts, err := prepareDocumentBounded(
 		content, mediaType, time.Duration(w.settings.ParseTimeoutSeconds*float64(time.Second)))
 	if err != nil {
-		if parseErr, ok := err.(*docparse.ParseError); ok {
+		if parseErr, ok := err.(*parser.ParseError); ok {
 			return &NonRetryableError{Message: parseErr.Message}
 		}
 		return err
@@ -91,7 +91,7 @@ func (w *Worker) processResume(ctx context.Context, job *ClaimedJob) error {
 	return w.queueEvaluations(ctx, job)
 }
 
-func (w *Worker) storeParsedResume(ctx context.Context, job *ClaimedJob, doc docparse.ParsedDocument, structuredFacts, normalizedFacts map[string]any) (bool, error) {
+func (w *Worker) storeParsedResume(ctx context.Context, job *ClaimedJob, doc parser.ParsedDocument, structuredFacts, normalizedFacts map[string]any) (bool, error) {
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -367,7 +367,7 @@ func (w *Worker) storeBlockEmbeddings(ctx context.Context, job *ClaimedJob) erro
 	return tx.Commit(ctx)
 }
 
-func artifactToMap(doc docparse.ParsedDocument) map[string]any {
+func artifactToMap(doc parser.ParsedDocument) map[string]any {
 	blocks := make([]any, 0, len(doc.Blocks))
 	for _, block := range doc.Blocks {
 		blocks = append(blocks, map[string]any{
@@ -454,4 +454,3 @@ func uniqueStrings(values []string) []string {
 	}
 	return out
 }
-

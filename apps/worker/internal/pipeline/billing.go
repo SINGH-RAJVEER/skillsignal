@@ -14,23 +14,18 @@ import (
 // settlePointsFromUsage charges the greater of the minimum or the
 // ceiling-rounded reported cost, falling back to token counts at the price
 // ceilings when the provider reported no usable cost.
-func settlePointsFromUsage(promptTokens, completionTokens int, reportedCostUSD float64, kind string, settings config.Settings) int {
+func settlePointsFromUsage(promptTokens, completionTokens int, reportedCostUSD float64, kind string, settings config.BillingSettings) int {
 	billingSettings := billingSettingsFrom(settings)
-	cost := reportedCostUSD
-	if cost <= 0 {
-		cost = (float64(promptTokens)*billingSettings.PriceCeilingInputPerMil +
-			float64(completionTokens)*billingSettings.PriceCeilingOutputPerMil) / 1_000_000
-	}
-	return billing.SettlePoints(&cost, kind, billingSettings)
+	return billing.SettleFromUsage(promptTokens, completionTokens, reportedCostUSD, kind, billingSettings)
 }
 
-func billingSettingsFrom(settings config.Settings) billing.Settings {
+func billingSettingsFrom(settings config.BillingSettings) billing.Settings {
 	converted := billing.DefaultSettings()
-	converted.PointsPerUSD = settings.Billing.PointsPerUSD
-	converted.MinIndependentPoints = settings.Billing.MinIndependentPoints
-	converted.MinEmployerResumePoints = settings.Billing.MinEmployerResumePoints
-	converted.PriceCeilingInputPerMil = settings.Billing.PriceCeilingInputPerMil
-	converted.PriceCeilingOutputPerMil = settings.Billing.PriceCeilingOutputPerMil
+	converted.PointsPerUSD = settings.PointsPerUSD
+	converted.MinIndependentPoints = settings.MinIndependentPoints
+	converted.MinEmployerResumePoints = settings.MinEmployerResumePoints
+	converted.PriceCeilingInputPerMil = settings.PriceCeilingInputPerMil
+	converted.PriceCeilingOutputPerMil = settings.PriceCeilingOutputPerMil
 	return converted
 }
 
