@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/skillsignal/backend/config"
 	"github.com/skillsignal/backend/db"
 	"github.com/skillsignal/backend/httpx"
@@ -18,9 +20,10 @@ import (
 )
 
 type Definition struct {
-	Name        string   `json:"name"`
-	Owns        []string `json:"owns"`
-	RouteGroups []string `json:"routeGroups"`
+	Name           string                              `json:"name"`
+	Owns           []string                            `json:"owns"`
+	RouteGroups    []string                            `json:"routeGroups"`
+	RegisterRoutes func(*http.ServeMux, *pgxpool.Pool) `json:"-"`
 }
 
 func Run(definition Definition) {
@@ -52,6 +55,9 @@ func Run(definition Definition) {
 	mux.HandleFunc("GET /internal/service-info", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, definition)
 	})
+	if definition.RegisterRoutes != nil {
+		definition.RegisterRoutes(mux, pool)
+	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		owner, ok := routes.ServiceFor(r.URL.Path)
 		if !ok || owner != definition.Name {
