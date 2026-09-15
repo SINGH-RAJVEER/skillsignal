@@ -51,25 +51,29 @@ intended product.
 
 ```
 apps/
-	api/     Go HTTP service. Auth, organizations, jobs, uploads,
-	         invitations, evaluation queries, CSV export. Runs SQL
-	         migrations at container start.
-	worker/  Queue worker. Claims processing_job rows with FOR UPDATE SKIP
-	         LOCKED, parses documents, matches skills against a corpus,
-	         calls OpenRouter for extraction and assessment, renders the
-	         corrected DOCX. Independent deployable; talks to Postgres and
-	         reads uploaded files from shared storage.
-	web/     React 19 + Vite frontend. Candidate portal and employer
-	         workspace, shadcn-style UI components.
+	api/       Schema migration command retained from the Go port.
+	gateway/   Public HTTP entry point. Routes each request to its owning domain process.
+	worker/    Parser and inference worker implementation. WORKER_ROLE gives each process a disjoint queue.
+	web/       React 19 + Vite candidate portal and employer workspace.
+services/
+	cmd/
+		identity/    Users, accounts, employer organizations, members, and join policies.
+		hiring/      Jobs, requirements, candidate records, invitations, submissions, and review decisions.
+		documents/   Resume documents, immutable versions, storage metadata, and retention.
+		evaluation/  Independent and batch evaluations, evidence, embeddings, scores, and ranking.
+		billing/     Point accounts, ledger, reservations, weekly allowance, Razorpay, and entitlements.
 libs/
-	ui/      Shared UI component package used by web.
+	contracts/ Versioned route, event, and durable-job contracts shared across processes.
+	go-core/   Database, HTTP, configuration, and current shared domain helpers.
+	ui/        Shared UI component package used by web.
 docs/
-	specs/       Product behavior, one file per area. The source of truth.
-	research/    Provider constraints, architecture research.
+	specs/      Product behavior and service ownership.
+	research/   Provider constraints and architecture research.
 ```
 
-The worker's skill corpus (`apps/worker/worker/documents/skills_corpus.json`)
-is generated. Edit `scripts/build_skills_corpus.py`, never the JSON.
+The gateway is the only public backend process. Domain processes reject routes they do not own. PostgreSQL keeps one physical cluster but separates authoritative tables into `identity`, `hiring`, `documents`, `evaluation`, `billing`, and `platform` schemas. Domain processes connect with only their own schema and the platform delivery schema in their search path.
+
+Parser and inference workers claim different durable job types. Parser workers receive no OpenRouter credential. Inference workers handle model extraction, embeddings, assessment, scoring, and corrected-resume rendering. The worker skill corpus is generated at `apps/worker/internal/vocab/skills_corpus.json`.
 
 ## Run with Docker
 
@@ -93,17 +97,11 @@ ADMIN_TOKEN=some-admin-token
 docker compose up --build
 ```
 
-The API container applies SQL migrations on startup. The API and worker run as
-separate images and share the private storage volume. When everything is up:
-web at http://localhost:3000, API at http://localhost:8000 (health check at
-`/healthz`). Uploaded files live in the `resume_storage` volume; the worker
-mounts it read-write because it renders corrected resumes back into storage.
+Compose runs a one-shot migrator before the domain processes and workers start. The parser mounts source storage read-only. The inference worker mounts it read-write because corrected resumes are output artifacts. When startup finishes, the web client is at http://localhost:3000 and the gateway is at http://localhost:8000. `/healthz` checks the gateway process; `/readyz` checks every domain upstream.
 
 ## Run locally
 
-Assumes a running PostgreSQL server you can point at, plus [bun](https://bun.sh)
-and Go 1.26. `devenv up` provisions PostgreSQL and starts the Go API, worker,
-and Vite processes together.
+The supported local workflow is `devenv up`. It provisions PostgreSQL, applies migrations, and starts the gateway, five domain processes, parser worker, inference worker, and Vite client.
 
 1. Create a database, then export connection settings:
 
@@ -116,25 +114,10 @@ export OPENROUTER_API_KEY="sk-or-..."   # optional
 
 `.env.example` documents every variable with its default.
 
-2. API, in one terminal:
+2. Start the complete topology:
 
 ```sh
-go run ./apps/api/cmd/api migrate
-go run ./apps/api/cmd/api serve
-```
-
-3. Worker, in a second terminal:
-
-```sh
-go run ./apps/worker/cmd/worker
-```
-
-4. Web, in a third terminal:
-
-```sh
-bun install    # once, from the repo root
-cd apps/web
-bun dev        # vite on :3000, expects the API on :8000
+devenv up
 ```
 
 Sign up as an employer at `/sign-up` to reach the workspace, or as a
@@ -143,17 +126,20 @@ candidate to run private checks.
 ## Tests
 
 ```sh
+CGO_ENABLED=0 go test ./libs/contracts/...
 CGO_ENABLED=0 go test ./libs/go-core/...
 CGO_ENABLED=0 go test ./apps/api/...
+CGO_ENABLED=0 go test ./apps/gateway/...
 CGO_ENABLED=0 go test ./apps/worker/...
+CGO_ENABLED=0 go test ./services/...
 ```
 
-Or `bun test` at the repo root for both. The web app has no unit tests yet;
-check it with `bun run typecheck` and `bun run lint`.
+Or run `go-test` inside the devenv shell. The web app has no unit tests yet; check it with `bun run typecheck` and `bun run lint`.
 
 ## Where to read more
 
 `docs/specs/smart-resume-screener.md` is the product specification.
+`docs/specs/service-architecture.md` defines domain ownership, route routing, queue contracts, and database schemas.
 `docs/research/resume-screener-implementation.md` covers why the pipeline is
 shaped this way: parser choices, OpenRouter routing and privacy settings,
 scoring design, and the legal constraints around automated hiring tools.
