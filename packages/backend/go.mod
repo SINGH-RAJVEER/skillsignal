@@ -1,4 +1,4 @@
-module github.com/skillsignal/go-core
+module github.com/skillsignal/backend
 
 go 1.26.0
 

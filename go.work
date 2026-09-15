@@ -1,6 +1,6 @@
 go 1.26.0
 
-use ./packages/go-core
+use ./packages/backend
 
 use ./packages/contracts
 

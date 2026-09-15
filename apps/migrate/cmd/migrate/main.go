@@ -8,8 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/skillsignal/go-core/config"
-	"github.com/skillsignal/go-core/db"
+	"github.com/skillsignal/backend/config"
+	"github.com/skillsignal/backend/db"
 	"github.com/skillsignal/migrate/internal/migrate"
 )
 

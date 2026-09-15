@@ -9,8 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/skillsignal/backend/versions"
 	"github.com/skillsignal/contracts/jobs"
-	"github.com/skillsignal/go-core/versions"
 	parser "github.com/skillsignal/worker/internal/docparse"
 	"github.com/skillsignal/worker/internal/extractor"
 	"github.com/skillsignal/worker/internal/modelschemas"

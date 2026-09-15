@@ -6,9 +6,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/skillsignal/go-core/billing"
-	"github.com/skillsignal/go-core/config"
-	"github.com/skillsignal/go-core/ids"
+	"github.com/skillsignal/backend/billing"
+	"github.com/skillsignal/backend/config"
+	"github.com/skillsignal/backend/ids"
 )
 
 // settlePointsFromUsage charges the greater of the minimum or the

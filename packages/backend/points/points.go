@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/skillsignal/go-core/ids"
+	"github.com/skillsignal/backend/ids"
 )
 
 // ErrInsufficientPoints marks a reservation the balance cannot cover.

@@ -58,7 +58,7 @@ in
 		go build ./apps/migrate/cmd/migrate ./apps/gateway/cmd/gateway ./apps/worker/cmd/worker ./apps/identity/cmd/identity ./apps/hiring/cmd/hiring ./apps/documents/cmd/documents ./apps/evaluation/cmd/evaluation ./apps/billing/cmd/billing
 	'';
 	scripts.go-test.exec = ''
-		CGO_ENABLED=0 go test ./packages/contracts/... ./packages/go-core/... ./apps/migrate/... ./apps/gateway/... ./apps/worker/... ./apps/identity/... ./apps/hiring/... ./apps/documents/... ./apps/evaluation/... ./apps/billing/...
+		CGO_ENABLED=0 go test ./packages/contracts/... ./packages/backend/... ./apps/migrate/... ./apps/gateway/... ./apps/worker/... ./apps/identity/... ./apps/hiring/... ./apps/documents/... ./apps/evaluation/... ./apps/billing/...
 	'';
 	scripts.go-migrate.exec = ''
 		go run ./apps/migrate/cmd/migrate

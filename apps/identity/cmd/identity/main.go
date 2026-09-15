@@ -1,6 +1,6 @@
 package main
 
-import "github.com/skillsignal/go-core/servicehost"
+import "github.com/skillsignal/backend/servicehost"
 
 func main() {
 	servicehost.Run(servicehost.Definition{

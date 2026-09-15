@@ -11,8 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/skillsignal/go-core/points"
-	"github.com/skillsignal/go-core/storage"
+	"github.com/skillsignal/backend/points"
+	"github.com/skillsignal/backend/storage"
 )
 
 // Result counts one sweep pass.

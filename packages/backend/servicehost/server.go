@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/skillsignal/backend/config"
+	"github.com/skillsignal/backend/db"
+	"github.com/skillsignal/backend/httpx"
 	"github.com/skillsignal/contracts/routes"
-	"github.com/skillsignal/go-core/config"
-	"github.com/skillsignal/go-core/db"
-	"github.com/skillsignal/go-core/httpx"
 )
 
 type Definition struct {

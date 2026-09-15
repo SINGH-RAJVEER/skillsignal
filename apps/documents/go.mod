@@ -2,7 +2,7 @@ module github.com/skillsignal/documents
 
 go 1.26.0
 
-require github.com/skillsignal/go-core v0.0.0
+require github.com/skillsignal/backend v0.0.0
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -16,4 +16,4 @@ require (
 
 replace github.com/skillsignal/contracts => ../../packages/contracts
 
-replace github.com/skillsignal/go-core => ../../packages/go-core
+replace github.com/skillsignal/backend => ../../packages/backend

@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/skillsignal/backend/config"
+	"github.com/skillsignal/backend/db"
+	"github.com/skillsignal/backend/storage"
 	"github.com/skillsignal/contracts/jobs"
-	"github.com/skillsignal/go-core/config"
-	"github.com/skillsignal/go-core/db"
-	"github.com/skillsignal/go-core/storage"
 	"github.com/skillsignal/worker/internal/pipeline"
 )
 

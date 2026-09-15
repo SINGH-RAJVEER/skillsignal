@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/skillsignal/go-core v0.0.0
+	github.com/skillsignal/backend v0.0.0
 )
 
 require (
@@ -15,4 +15,4 @@ require (
 	golang.org/x/text v0.42.0 // indirect
 )
 
-replace github.com/skillsignal/go-core => ../../packages/go-core
+replace github.com/skillsignal/backend => ../../packages/backend

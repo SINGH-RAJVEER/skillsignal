@@ -14,7 +14,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/skillsignal/go-core/versions"
+	"github.com/skillsignal/backend/versions"
 	"github.com/skillsignal/worker/internal/schemas"
 	"github.com/skillsignal/worker/internal/vocab"
 )

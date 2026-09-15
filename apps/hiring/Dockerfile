@@ -2,13 +2,13 @@ FROM docker.io/library/golang:1.26 AS build
 
 WORKDIR /src
 COPY packages/contracts/go.mod ./packages/contracts/
-COPY packages/go-core/go.mod packages/go-core/go.sum ./packages/go-core/
+COPY packages/backend/go.mod packages/backend/go.sum ./packages/backend/
 COPY apps/hiring/go.mod ./apps/hiring/
 WORKDIR /src/apps/hiring
 RUN GOWORK=off go mod download
 WORKDIR /src
 COPY packages/contracts ./packages/contracts
-COPY packages/go-core ./packages/go-core
+COPY packages/backend ./packages/backend
 COPY apps/hiring ./apps/hiring
 RUN cd apps/hiring && GOWORK=off CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/service ./cmd/hiring
 

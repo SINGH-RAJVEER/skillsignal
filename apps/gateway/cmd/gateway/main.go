@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/skillsignal/backend/httpx"
 	"github.com/skillsignal/contracts/routes"
-	"github.com/skillsignal/go-core/httpx"
 )
 
 type upstream struct {
