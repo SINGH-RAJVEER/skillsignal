@@ -51,18 +51,16 @@ intended product.
 
 ```
 apps/
-	api/       Schema migration command retained from the Go port.
-	gateway/   Public HTTP entry point. Routes each request to its owning domain process.
-	worker/    Parser and inference worker implementation. WORKER_ROLE gives each process a disjoint queue.
-	web/       React 19 + Vite candidate portal and employer workspace.
-services/
-	cmd/
-		identity/    Users, accounts, employer organizations, members, and join policies.
-		hiring/      Jobs, requirements, candidate records, invitations, submissions, and review decisions.
-		documents/   Resume documents, immutable versions, storage metadata, and retention.
-		evaluation/  Independent and batch evaluations, evidence, embeddings, scores, and ranking.
-		billing/     Point accounts, ledger, reservations, weekly allowance, Razorpay, and entitlements.
-libs/
+	web/        React 19 + Vite candidate portal and employer workspace.
+	gateway/    Public HTTP entry point and route dispatch.
+	identity/   Users, accounts, employer organizations, members, and join policies.
+	hiring/     Jobs, requirements, candidate records, invitations, submissions, and review decisions.
+	documents/  Resume documents, immutable versions, storage metadata, and retention.
+	evaluation/ Independent and batch evaluations, evidence, embeddings, scores, and ranking.
+	billing/    Point accounts, ledger, reservations, weekly allowance, Razorpay, and entitlements.
+	worker/     Parser and inference worker implementation selected by WORKER_ROLE.
+	migrate/    One-shot PostgreSQL schema migration command.
+packages/
 	contracts/ Versioned route, event, and durable-job contracts shared across processes.
 	go-core/   Database, HTTP, configuration, and current shared domain helpers.
 	ui/        Shared UI component package used by web.
@@ -126,12 +124,12 @@ candidate to run private checks.
 ## Tests
 
 ```sh
-CGO_ENABLED=0 go test ./libs/contracts/...
-CGO_ENABLED=0 go test ./libs/go-core/...
-CGO_ENABLED=0 go test ./apps/api/...
+CGO_ENABLED=0 go test ./packages/contracts/...
+CGO_ENABLED=0 go test ./packages/go-core/...
+CGO_ENABLED=0 go test ./apps/migrate/...
 CGO_ENABLED=0 go test ./apps/gateway/...
 CGO_ENABLED=0 go test ./apps/worker/...
-CGO_ENABLED=0 go test ./services/...
+CGO_ENABLED=0 go test ./apps/identity/... ./apps/hiring/... ./apps/documents/... ./apps/evaluation/... ./apps/billing/...
 ```
 
 Or run `go-test` inside the devenv shell. The web app has no unit tests yet; check it with `bun run typecheck` and `bun run lint`.
