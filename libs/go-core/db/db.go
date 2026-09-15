@@ -5,10 +5,13 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var allSchemas = []string{"identity", "hiring", "documents", "evaluation", "billing", "platform", "public"}
 
 // NormalizeURL converts SQLAlchemy driver URLs to pgx URLs.
 func NormalizeURL(url string) string {
@@ -23,7 +26,20 @@ func NormalizeURL(url string) string {
 
 // Connect opens a pool with a pre-ping like the Python engine.
 func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, NormalizeURL(databaseURL))
+	return ConnectFor(ctx, databaseURL, allSchemas...)
+}
+
+// ConnectFor opens a pool whose unqualified queries can see only the named schemas.
+func ConnectFor(ctx context.Context, databaseURL string, schemas ...string) (*pgxpool.Pool, error) {
+	if len(schemas) == 0 {
+		return nil, fmt.Errorf("db: at least one schema is required")
+	}
+	config, err := pgxpool.ParseConfig(NormalizeURL(databaseURL))
+	if err != nil {
+		return nil, err
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = SchemaSearchPath(schemas...)
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, err
 	}
@@ -32,4 +48,13 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 		return nil, err
 	}
 	return pool, nil
+}
+
+// SchemaSearchPath quotes schema identifiers before they enter a connection parameter.
+func SchemaSearchPath(schemas ...string) string {
+	quoted := make([]string, 0, len(schemas))
+	for _, schema := range schemas {
+		quoted = append(quoted, `"`+strings.ReplaceAll(schema, `"`, `""`)+`"`)
+	}
+	return strings.Join(quoted, ",")
 }
