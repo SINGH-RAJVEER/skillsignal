@@ -4,10 +4,10 @@ WORKDIR /src
 COPY package.json bun.lock* ./
 COPY tsconfig.base.json ./tsconfig.base.json
 COPY apps/web/package.json ./apps/web/package.json
-COPY libs/ui/package.json ./libs/ui/package.json
+COPY packages/ui/package.json ./packages/ui/package.json
 RUN bun install --frozen-lockfile
 COPY apps/web ./apps/web
-COPY libs/ui ./libs/ui
+COPY packages/ui ./packages/ui
 ARG VITE_API_URL=http://localhost:8000
 ENV VITE_API_URL=$VITE_API_URL
 RUN cd apps/web && bun run build

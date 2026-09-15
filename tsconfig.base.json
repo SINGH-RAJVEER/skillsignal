@@ -21,7 +21,7 @@
 
 		"paths": {
 			"@/*": ["./apps/*"],
-			"@pkg/*": ["./libs/*"]
+			"@pkg/*": ["./packages/*"]
 		},
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
