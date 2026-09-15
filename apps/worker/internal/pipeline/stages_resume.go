@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/skillsignal/contracts/jobs"
 	"github.com/skillsignal/go-core/versions"
 	parser "github.com/skillsignal/worker/internal/docparse"
 	"github.com/skillsignal/worker/internal/extractor"
@@ -18,7 +19,7 @@ import (
 	"github.com/skillsignal/worker/internal/semantic"
 )
 
-func (w *Worker) processResume(ctx context.Context, job *ClaimedJob) error {
+func (w *Worker) parseResume(ctx context.Context, job *ClaimedJob) error {
 	var storageKey, mediaType string
 	err := w.pool.QueryRow(ctx,
 		`SELECT document.storage_key, document.media_type
@@ -43,10 +44,26 @@ func (w *Worker) processResume(ctx context.Context, job *ClaimedJob) error {
 		}
 		return err
 	}
+	normalizedFacts = addDocumentWarnings(normalizedFacts, doc.Quality.Warnings)
+	stored, err := w.storeParsedResume(ctx, job, doc, nil, normalizedFacts)
+	if err != nil {
+		return err
+	}
+	if !stored || doc.Quality.State != "ready" {
+		return nil
+	}
+	return w.queueFollowupJob(ctx, job, jobs.ResumeEnrich)
+}
+
+func (w *Worker) enrichResume(ctx context.Context, job *ClaimedJob) error {
+	doc, normalizedFacts, err := w.loadParsedResume(ctx, job.PayloadReference)
+	if err != nil {
+		return err
+	}
 	var extractedFacts map[string]any
-	if doc.Quality.State == "ready" && w.models == nil {
+	if w.models == nil {
 		normalizedFacts = addDocumentWarnings(normalizedFacts, []string{DeterministicExtractionWarning})
-	} else if doc.Quality.State == "ready" && w.models != nil {
+	} else {
 		raw, err := w.models.CompleteJSON(
 			w.settings.OpenRouter.ExtractionModel,
 			prompts.ExtractionSystemPrompt,
@@ -78,17 +95,85 @@ func (w *Worker) processResume(ctx context.Context, job *ClaimedJob) error {
 			}
 		}
 	}
-	stored, err := w.storeParsedResume(ctx, job, doc, extractedFacts, normalizedFacts)
+	stored, err := w.storeEnrichedResume(ctx, job, extractedFacts, normalizedFacts)
 	if err != nil {
 		return err
 	}
-	if !stored || doc.Quality.State != "ready" {
+	if !stored {
 		return nil
 	}
 	if err := w.storeBlockEmbeddings(ctx, job); err != nil {
 		return err
 	}
 	return w.queueEvaluations(ctx, job)
+}
+
+func (w *Worker) loadParsedResume(ctx context.Context, resumeVersionID string) (parser.ParsedDocument, map[string]any, error) {
+	var artifactJSON, factsJSON []byte
+	err := w.pool.QueryRow(ctx,
+		`SELECT extraction_blocks, normalized_facts FROM resume_version WHERE id = $1`,
+		resumeVersionID).Scan(&artifactJSON, &factsJSON)
+	if err == pgx.ErrNoRows {
+		return parser.ParsedDocument{}, nil, &NonRetryableError{Message: "Resume version not found"}
+	}
+	if err != nil {
+		return parser.ParsedDocument{}, nil, err
+	}
+	var doc parser.ParsedDocument
+	if err := json.Unmarshal(artifactJSON, &doc); err != nil {
+		return parser.ParsedDocument{}, nil, &NonRetryableError{Message: "Parsed resume artifact is invalid"}
+	}
+	return doc, unmarshalJSONMap(factsJSON), nil
+}
+
+func (w *Worker) storeEnrichedResume(ctx context.Context, job *ClaimedJob, structuredFacts, normalizedFacts map[string]any) (bool, error) {
+	structured := map[string]any{}
+	var extractionPromptVersion *string
+	if structuredFacts != nil {
+		structured = structuredFacts
+		version := versions.ExtractionPromptVersion
+		extractionPromptVersion = &version
+	}
+	tx, err := w.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var id string
+	err = tx.QueryRow(ctx,
+		`UPDATE resume_version
+		 SET structured_facts = CAST($1 AS jsonb), normalized_facts = CAST($2 AS jsonb),
+		     schema_version = $3, extraction_prompt_version = $4
+		 WHERE id = $5
+		   AND EXISTS (
+		       SELECT 1 FROM processing_job
+		       WHERE id = $6 AND lease_token = $7 AND lease_expires_at > now())
+		 RETURNING id`,
+		marshalJSON(structured), marshalJSON(normalizedFacts), versions.ResumeFactsSchemaVersion,
+		extractionPromptVersion, job.PayloadReference, job.ID, job.LeaseToken).Scan(&id)
+	if err == pgx.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	contact, _ := normalizedFacts["contact"].(map[string]any)
+	if contact == nil {
+		return false, &NonRetryableError{Message: "Resume contact facts are invalid"}
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE candidate_record AS candidate
+		 SET full_name = COALESCE(candidate.full_name, $1),
+		     email = COALESCE(candidate.email, $2),
+		     location = COALESCE(candidate.location, $3), updated_at = now()
+		 FROM resume_submission AS submission
+		 WHERE submission.candidate_record_id = candidate.id
+		   AND submission.resume_version_id = $4`,
+		nullableString(contact["name"]), nullableString(contact["email"]),
+		nullableString(contact["location"]), job.PayloadReference); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }
 
 func (w *Worker) storeParsedResume(ctx context.Context, job *ClaimedJob, doc parser.ParsedDocument, structuredFacts, normalizedFacts map[string]any) (bool, error) {
@@ -230,10 +315,10 @@ func (w *Worker) queueEvaluations(ctx context.Context, job *ClaimedJob) error {
 			     id, type, status, payload_reference, idempotency_key,
 			     attempt_count, maximum_attempts, available_at, created_at, updated_at
 			 ) VALUES (
-			     $1, 'evaluation_processing', 'ready', $2, $2, 0, 3, now(), now(), now()
+			     $1, $2, 'ready', $3, $3, 0, 3, now(), now(), now()
 			 )
 			 ON CONFLICT (type, idempotency_key) DO NOTHING`,
-			newID(), evaluationID); err != nil {
+			newID(), jobs.EvaluationProcess, evaluationID); err != nil {
 			return err
 		}
 	}

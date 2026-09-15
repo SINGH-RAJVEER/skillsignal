@@ -107,7 +107,9 @@ func purgeIndependentEvaluations(ctx context.Context, tx pgx.Tx, ids []string) e
 			}
 		}
 		if _, err := tx.Exec(ctx,
-			`DELETE FROM processing_job WHERE type = 'independent_evaluation_processing' AND payload_reference = $1`, id); err != nil {
+			`DELETE FROM processing_job
+			 WHERE type IN ('independent_evaluation_parse', 'independent_evaluation_enrich')
+			   AND payload_reference = $1`, id); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM independent_evaluation WHERE id = $1`, id); err != nil {

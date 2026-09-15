@@ -374,6 +374,7 @@ CREATE TABLE independent_evaluation (
 	job_description_key TEXT,
 	job_description_media_type TEXT,
 	status TEXT NOT NULL DEFAULT 'queued',
+	extraction_blocks JSONB,
 	score INTEGER,
 	suggestions JSONB,
 	improved_resume_key TEXT,

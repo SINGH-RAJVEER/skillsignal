@@ -3,11 +3,13 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/skillsignal/contracts/jobs"
 	"github.com/skillsignal/go-core/versions"
 	parser "github.com/skillsignal/worker/internal/docparse"
 	"github.com/skillsignal/worker/internal/extractor"
@@ -22,7 +24,7 @@ func (w *Worker) parseTimeout() time.Duration {
 	return time.Duration(w.settings.ParseTimeoutSeconds * float64(time.Second))
 }
 
-func (w *Worker) processIndependentEvaluation(ctx context.Context, job *ClaimedJob) error {
+func (w *Worker) parseIndependentEvaluation(ctx context.Context, job *ClaimedJob) error {
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -83,6 +85,61 @@ func (w *Worker) processIndependentEvaluation(ctx context.Context, job *ClaimedJ
 		}
 		description = text
 	} else if jobDescription != nil {
+		description = *jobDescription
+	}
+	tx, err = w.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var updated string
+	err = tx.QueryRow(ctx,
+		`UPDATE independent_evaluation
+		 SET extraction_blocks = CAST($1 AS jsonb),
+		     normalized_facts = CAST($2 AS jsonb),
+		     job_description = $3,
+		     parser_version = $4,
+		     parser_configuration_version = $5
+		 WHERE id = $6
+		   AND EXISTS (
+		       SELECT 1 FROM processing_job
+		       WHERE id = $7 AND lease_token = $8 AND lease_expires_at > now())
+		 RETURNING id`,
+		marshalJSON(artifactToMap(doc)), marshalJSON(addDocumentWarnings(normalizedFacts, doc.Quality.Warnings)),
+		nullableIfEmpty(description), versions.LocalParserVersion, versions.ParserConfigurationVersion,
+		job.PayloadReference, job.ID, job.LeaseToken).Scan(&updated)
+	if err == pgx.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return w.queueFollowupJob(ctx, job, jobs.IndependentEvaluationEnrich)
+}
+
+func (w *Worker) enrichIndependentEvaluation(ctx context.Context, job *ClaimedJob) error {
+	var artifactJSON, factsJSON []byte
+	var jobDescription *string
+	err := w.pool.QueryRow(ctx,
+		`SELECT extraction_blocks, normalized_facts, job_description
+		 FROM independent_evaluation WHERE id = $1`,
+		job.PayloadReference).Scan(&artifactJSON, &factsJSON, &jobDescription)
+	if err == pgx.ErrNoRows {
+		return &NonRetryableError{Message: "Independent evaluation not found"}
+	}
+	if err != nil {
+		return err
+	}
+	var doc parser.ParsedDocument
+	if err := json.Unmarshal(artifactJSON, &doc); err != nil {
+		return &NonRetryableError{Message: "Parsed resume artifact is invalid"}
+	}
+	normalizedFacts := unmarshalJSONMap(factsJSON)
+	description := ""
+	if jobDescription != nil {
 		description = *jobDescription
 	}
 	modelUsed := false

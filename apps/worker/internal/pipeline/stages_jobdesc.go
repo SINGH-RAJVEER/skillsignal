@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/skillsignal/contracts/jobs"
 	"github.com/skillsignal/go-core/versions"
 	"github.com/skillsignal/worker/internal/compiler"
 	parser "github.com/skillsignal/worker/internal/docparse"
@@ -16,7 +17,7 @@ import (
 	"github.com/skillsignal/worker/internal/prompts"
 )
 
-func (w *Worker) processJobDescription(ctx context.Context, job *ClaimedJob) error {
+func (w *Worker) parseJobDescription(ctx context.Context, job *ClaimedJob) error {
 	var sourceText *string
 	var storageKey *string
 	var mediaType string
@@ -44,6 +45,43 @@ func (w *Worker) processJobDescription(ctx context.Context, job *ClaimedJob) err
 		source = *sourceText
 	} else {
 		return &NonRetryableError{Message: "Job description is unavailable"}
+	}
+	tx, err := w.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var updated string
+	err = tx.QueryRow(ctx,
+		`UPDATE job_version
+		 SET source_text = $1, normalized_text = $2
+		 WHERE id = $3
+		   AND EXISTS (
+		       SELECT 1 FROM processing_job
+		       WHERE id = $4 AND lease_token = $5 AND lease_expires_at > now())
+		 RETURNING id`,
+		source, trimSpace(source), job.PayloadReference, job.ID, job.LeaseToken).Scan(&updated)
+	if err == pgx.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return w.queueFollowupJob(ctx, job, jobs.JobDescriptionEnrich)
+}
+
+func (w *Worker) enrichJobDescription(ctx context.Context, job *ClaimedJob) error {
+	var source string
+	err := w.pool.QueryRow(ctx,
+		`SELECT normalized_text FROM job_version WHERE id = $1`, job.PayloadReference).Scan(&source)
+	if err == pgx.ErrNoRows {
+		return &NonRetryableError{Message: "Job version not found"}
+	}
+	if err != nil {
+		return err
 	}
 	var artifact map[string]any
 	if w.models == nil {
@@ -82,14 +120,13 @@ func (w *Worker) processJobDescription(ctx context.Context, job *ClaimedJob) err
 	schemaVersion, _ := artifact["schemaVersion"].(string)
 	if _, err := tx.Exec(ctx,
 		`UPDATE job_version
-		 SET draft_requirements = CAST($1 AS jsonb),
-		     source_text = $2, normalized_text = $3,
-		     schema_version = $4, prompt_version = $5, compiler_version = $6
-		 WHERE id = $7
-		   AND EXISTS (
-		       SELECT 1 FROM processing_job
-		       WHERE id = $8 AND lease_token = $9 AND lease_expires_at > now())`,
-		marshalJSON(artifact), source, trimSpace(source), schemaVersion,
+			 SET draft_requirements = CAST($1 AS jsonb),
+			     schema_version = $2, prompt_version = $3, compiler_version = $4
+			 WHERE id = $5
+			   AND EXISTS (
+			       SELECT 1 FROM processing_job
+			       WHERE id = $6 AND lease_token = $7 AND lease_expires_at > now())`,
+		marshalJSON(artifact), schemaVersion,
 		versions.JobRequirementsPromptVersion, versions.JobRequirementsCompilerVersion,
 		job.PayloadReference, job.ID, job.LeaseToken); err != nil {
 		return err

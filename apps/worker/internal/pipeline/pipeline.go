@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/skillsignal/contracts/jobs"
 	"github.com/skillsignal/go-core/config"
 	"github.com/skillsignal/go-core/ids"
 	"github.com/skillsignal/go-core/storage"
@@ -64,19 +65,24 @@ type Worker struct {
 	settings config.Settings
 	models   *openrouter.Client
 	store    *storage.Store
+	role     jobs.Role
+	jobTypes []string
 }
 
-// New builds a worker; models is nil when no API key is configured.
-func New(pool *pgxpool.Pool, settings config.Settings, store *storage.Store) *Worker {
+// New builds a worker restricted to the durable job types owned by role.
+func New(pool *pgxpool.Pool, settings config.Settings, store *storage.Store, role jobs.Role) *Worker {
 	var models *openrouter.Client
-	if settings.OpenRouter.APIKey != "" {
+	if role == jobs.InferenceRole && settings.OpenRouter.APIKey != "" {
 		models = openrouter.New(
 			settings.OpenRouter.APIKey,
 			settings.OpenRouter.BaseURL,
 			time.Duration(settings.OpenRouter.TimeoutSeconds*float64(time.Second)),
 		)
 	}
-	return &Worker{pool: pool, settings: settings, models: models, store: store}
+	return &Worker{
+		pool: pool, settings: settings, models: models, store: store,
+		role: role, jobTypes: jobs.TypesFor(role),
+	}
 }
 
 // Run polls until the context ends.
@@ -204,11 +210,12 @@ func (w *Worker) claim(ctx context.Context) (*ClaimedJob, error) {
 	err = tx.QueryRow(ctx,
 		`SELECT id, type, payload_reference, attempt_count, maximum_attempts
 		 FROM processing_job
-		 WHERE (status = 'ready' AND available_at <= now())
-		    OR (status = 'processing' AND lease_expires_at < now())
+		 WHERE type = ANY($1)
+		   AND ((status = 'ready' AND available_at <= now())
+		    OR (status = 'processing' AND lease_expires_at < now()))
 		 ORDER BY available_at, created_at
 		 FOR UPDATE SKIP LOCKED
-		 LIMIT 1`).Scan(&job.ID, &job.Type, &job.PayloadReference, &job.AttemptCount, &job.MaximumAttempts)
+		 LIMIT 1`, w.jobTypes).Scan(&job.ID, &job.Type, &job.PayloadReference, &job.AttemptCount, &job.MaximumAttempts)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -233,17 +240,52 @@ func (w *Worker) claim(ctx context.Context) (*ClaimedJob, error) {
 
 func (w *Worker) dispatch(ctx context.Context, job *ClaimedJob) error {
 	switch job.Type {
-	case "job_description_processing":
-		return w.processJobDescription(ctx, job)
-	case "independent_evaluation_processing":
-		return w.processIndependentEvaluation(ctx, job)
-	case "evaluation_processing":
+	case string(jobs.JobDescriptionParse):
+		return w.parseJobDescription(ctx, job)
+	case string(jobs.JobDescriptionEnrich):
+		return w.enrichJobDescription(ctx, job)
+	case string(jobs.IndependentEvaluationParse):
+		return w.parseIndependentEvaluation(ctx, job)
+	case string(jobs.IndependentEvaluationEnrich):
+		return w.enrichIndependentEvaluation(ctx, job)
+	case string(jobs.EvaluationProcess):
 		return w.prepareEvaluation(ctx, job)
-	case "resume_processing":
-		return w.processResume(ctx, job)
+	case string(jobs.ResumeParse):
+		return w.parseResume(ctx, job)
+	case string(jobs.ResumeEnrich):
+		return w.enrichResume(ctx, job)
 	default:
 		return &NonRetryableError{Message: "Unsupported processing job type"}
 	}
+}
+
+func (w *Worker) queueFollowupJob(ctx context.Context, current *ClaimedJob, next jobs.Type) error {
+	tx, err := w.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var active bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (
+		    SELECT 1 FROM processing_job
+		    WHERE id = $1 AND lease_token = $2 AND lease_expires_at > now())`,
+		current.ID, current.LeaseToken).Scan(&active); err != nil {
+		return err
+	}
+	if !active {
+		return nil
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO processing_job (
+		     id, type, status, payload_reference, idempotency_key,
+		     attempt_count, maximum_attempts, available_at, created_at, updated_at
+		 ) VALUES ($1, $2, 'ready', $3, $4, 0, 3, now(), now(), now())
+		 ON CONFLICT (type, idempotency_key) DO NOTHING`,
+		newID(), next, current.PayloadReference, string(next)+":"+current.PayloadReference); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (w *Worker) prepareEvaluation(ctx context.Context, job *ClaimedJob) error {
@@ -438,11 +480,11 @@ func (w *Worker) fail(ctx context.Context, job *ClaimedJob, message string, retr
 		return nil
 	}
 	switch job.Type {
-	case "independent_evaluation_processing":
+	case string(jobs.IndependentEvaluationParse), string(jobs.IndependentEvaluationEnrich):
 		return w.failIndependentEvaluation(ctx, job, message)
-	case "resume_processing":
+	case string(jobs.ResumeParse), string(jobs.ResumeEnrich):
 		return w.failResume(ctx, job)
-	case "evaluation_processing":
+	case string(jobs.EvaluationProcess):
 		return w.failEvaluation(ctx, job)
 	default:
 		return nil
