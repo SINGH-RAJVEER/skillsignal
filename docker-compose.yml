@@ -1,3 +1,19 @@
+x-domain-service: &domain-service
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  environment:
+    DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/skillsignal
+    PORT: "8080"
+  read_only: true
+  tmpfs:
+    - /tmp:noexec,nosuid,size=16m
+  healthcheck:
+    test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/readyz"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
 services:
   db:
     image: docker.io/library/postgres:18-alpine
@@ -6,8 +22,6 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
-      # PostgreSQL 18 stores data below a versioned directory; mount the
-      # parent so both Docker and rootless Podman handle upgrades correctly.
       - postgres_data:/var/lib/postgresql:Z
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d skillsignal"]
@@ -15,40 +29,122 @@ services:
       timeout: 5s
       retries: 20
 
-  api:
+  migrate:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    command: ["migrate"]
     depends_on:
       db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/skillsignal
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      STORAGE_ROOT: /var/lib/skillsignal
+    restart: "no"
+
+  identity:
+    <<: *domain-service
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: identity
+
+  hiring:
+    <<: *domain-service
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: hiring
+
+  documents:
+    <<: *domain-service
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: documents
+
+  evaluation:
+    <<: *domain-service
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: evaluation
+
+  billing:
+    <<: *domain-service
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: billing
+
+  gateway:
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    depends_on:
+      identity:
+        condition: service_healthy
+      hiring:
+        condition: service_healthy
+      documents:
+        condition: service_healthy
+      evaluation:
+        condition: service_healthy
+      billing:
         condition: service_healthy
     ports:
       - "${SKILLSIGNAL_API_PORT:-8000}:8000"
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/skillsignal
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-      WEB_URL: ${WEB_URL:-http://localhost:3000}
-      STORAGE_ROOT: /var/lib/skillsignal
       PORT: "8000"
-    volumes:
-      - resume_storage:/var/lib/skillsignal:Z
+      WEB_URL: ${WEB_URL:-http://localhost:3000}
+      IDENTITY_URL: http://identity:8080
+      HIRING_URL: http://hiring:8080
+      DOCUMENTS_URL: http://documents:8080
+      EVALUATION_URL: http://evaluation:8080
+      BILLING_URL: http://billing:8080
+    read_only: true
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8000/healthz"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8000/readyz"]
       interval: 5s
       timeout: 3s
       retries: 20
 
-  worker:
+  parser-worker:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
     depends_on:
-      api:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/skillsignal
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       STORAGE_ROOT: /var/lib/skillsignal
+      WORKER_ROLE: parser
+    volumes:
+      - resume_storage:/var/lib/skillsignal:ro,Z
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+
+  inference-worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/skillsignal
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      STORAGE_ROOT: /var/lib/skillsignal
+      WORKER_ROLE: inference
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     volumes:
       - resume_storage:/var/lib/skillsignal:Z
@@ -62,6 +158,9 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    depends_on:
+      gateway:
+        condition: service_healthy
     ports:
       - "${SKILLSIGNAL_WEB_PORT:-3000}:3000"
 

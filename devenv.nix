@@ -10,6 +10,13 @@ let
 	webPort =
 		let value = builtins.getEnv "SKILLSIGNAL_WEB_PORT";
 		in if value == "" then "3000" else value;
+	servicePorts = {
+		identity = "8101";
+		hiring = "8102";
+		documents = "8103";
+		evaluation = "8104";
+		billing = "8105";
+	};
 
 	# DATABASE_URL is assembled at process start from PGHOST/PGPORT because
 	# devenv resolves the postgres port per invocation when 5432 is busy.
@@ -18,6 +25,22 @@ let
 
 	# Compiled Go binaries live in devenv state, outside the source tree.
 	binDir = "${config.devenv.root}/.devenv/state/go";
+	mkDomainProcess = name: port: dependencies: {
+		exec = lib.concatStringsSep "\n" [
+			processDbUrl
+			"export PORT=${port}"
+			"mkdir -p ${binDir}"
+			"go build -o ${binDir}/${name} ./services/cmd/${name}"
+			"exec ${binDir}/${name}"
+		];
+		cwd = config.devenv.root;
+		after = dependencies;
+		ready.http.get.port = lib.toInt port;
+		ready.http.get.path = "/readyz";
+		ready.period = 3;
+		ready.probe_timeout = 2;
+		ready.failure_threshold = 60;
+	};
 in
 {
 	dotenv.disableHint = true;
@@ -28,14 +51,14 @@ in
 		bun.install.enable = true;
 	};
 
-	# The API and worker are Go modules joined by go.work at the repo root.
+	# The domain processes, gateway, workers, and shared libraries use go.work.
 	languages.go.enable = true;
 
 	scripts.go-build.exec = ''
-		go build ./apps/api/cmd/api ./apps/worker/cmd/worker
+		go build ./apps/api/cmd/api ./apps/gateway/cmd/gateway ./apps/worker/cmd/worker ./services/cmd/...
 	'';
 	scripts.go-test.exec = ''
-		CGO_ENABLED=0 go test ./libs/go-core/... ./apps/api/... ./apps/worker/...
+		CGO_ENABLED=0 go test ./libs/contracts/... ./libs/go-core/... ./apps/api/... ./apps/gateway/... ./apps/worker/... ./services/...
 	'';
 	scripts.go-migrate.exec = ''
 		go run ./apps/api/cmd/api migrate
@@ -63,38 +86,80 @@ in
 		CGO_ENABLED = "0";
 	};
 
-	processes.api = {
-		# The binary is built and exec'd rather than run through `go run`,
-		# which forks the compiled binary as a child and leaves it orphaned
-		# holding the port when process-compose stops the wrapper.
+	processes.identity = {
 		exec = lib.concatStringsSep "\n" [
 			processDbUrl
-			"export PORT=${apiPort}"
+			"export PORT=${servicePorts.identity}"
 			"mkdir -p ${binDir}"
-			"go build -o ${binDir}/api ./cmd/api"
-			# Same boot sequence as apps/api/Dockerfile: migrate, then serve.
-			"${binDir}/api migrate && exec ${binDir}/api serve"
+			"go build -o ${binDir}/migrate ./apps/api/cmd/api"
+			"${binDir}/migrate migrate"
+			"go build -o ${binDir}/identity ./services/cmd/identity"
+			"exec ${binDir}/identity"
 		];
-		cwd = "${config.devenv.root}/apps/api";
+		cwd = config.devenv.root;
 		after = [ "devenv:processes:postgres@ready" ];
-		# The first run compiles the module; allow a few minutes of boot time.
-		ready.http.get.port = lib.toInt apiPort;
-		ready.http.get.path = "/healthz";
+		ready.http.get.port = lib.toInt servicePorts.identity;
+		ready.http.get.path = "/readyz";
 		ready.period = 3;
 		ready.probe_timeout = 2;
 		ready.failure_threshold = 60;
 	};
 
-	processes.worker = {
+	processes.hiring = mkDomainProcess "hiring" servicePorts.hiring [ "devenv:processes:identity@ready" ];
+	processes.documents = mkDomainProcess "documents" servicePorts.documents [ "devenv:processes:identity@ready" ];
+	processes.evaluation = mkDomainProcess "evaluation" servicePorts.evaluation [ "devenv:processes:identity@ready" ];
+	processes.billing = mkDomainProcess "billing" servicePorts.billing [ "devenv:processes:identity@ready" ];
+
+	processes.gateway = {
+		exec = lib.concatStringsSep "\n" [
+			"export PORT=${apiPort}"
+			"export IDENTITY_URL=http://127.0.0.1:${servicePorts.identity}"
+			"export HIRING_URL=http://127.0.0.1:${servicePorts.hiring}"
+			"export DOCUMENTS_URL=http://127.0.0.1:${servicePorts.documents}"
+			"export EVALUATION_URL=http://127.0.0.1:${servicePorts.evaluation}"
+			"export BILLING_URL=http://127.0.0.1:${servicePorts.billing}"
+			"mkdir -p ${binDir}"
+			"go build -o ${binDir}/gateway ./apps/gateway/cmd/gateway"
+			"exec ${binDir}/gateway"
+		];
+		cwd = config.devenv.root;
+		after = [
+			"devenv:processes:identity@ready"
+			"devenv:processes:hiring@ready"
+			"devenv:processes:documents@ready"
+			"devenv:processes:evaluation@ready"
+			"devenv:processes:billing@ready"
+		];
+		ready.http.get.port = lib.toInt apiPort;
+		ready.http.get.path = "/readyz";
+		ready.period = 3;
+		ready.probe_timeout = 2;
+		ready.failure_threshold = 60;
+	};
+
+	processes.parser-worker = {
 		exec = lib.concatStringsSep "\n" [
 			processDbUrl
+			"export WORKER_ROLE=parser"
+			"unset OPENROUTER_API_KEY"
 			"mkdir -p ${binDir}"
-			"go build -o ${binDir}/worker ./cmd/worker"
-			"exec ${binDir}/worker"
+			"go build -o ${binDir}/parser-worker ./apps/worker/cmd/worker"
+			"exec ${binDir}/parser-worker"
 		];
-		cwd = "${config.devenv.root}/apps/worker";
-		# Wait for the API so migrations have created the job tables.
-		after = [ "devenv:processes:api@ready" ];
+		cwd = config.devenv.root;
+		after = [ "devenv:processes:identity@ready" ];
+	};
+
+	processes.inference-worker = {
+		exec = lib.concatStringsSep "\n" [
+			processDbUrl
+			"export WORKER_ROLE=inference"
+			"mkdir -p ${binDir}"
+			"go build -o ${binDir}/inference-worker ./apps/worker/cmd/worker"
+			"exec ${binDir}/inference-worker"
+		];
+		cwd = config.devenv.root;
+		after = [ "devenv:processes:identity@ready" ];
 	};
 
 	processes.web = {
@@ -128,7 +193,7 @@ in
 
 	infoSections."developer preview" = [
 		"web      http://localhost:${webPort}"
-		"api      http://localhost:${apiPort}/healthz"
+		"gateway  http://localhost:${apiPort}/readyz"
 		"postgres psql --dbname skillsignal --username postgres (uses $PGHOST/$PGPORT)"
 	];
 }

@@ -2,6 +2,12 @@ go 1.26.0
 
 use ./libs/go-core
 
+use ./libs/contracts
+
 use ./apps/api
 
+use ./apps/gateway
+
 use ./apps/worker
+
+use ./services
