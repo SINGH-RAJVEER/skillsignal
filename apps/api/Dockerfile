@@ -11,13 +11,10 @@ COPY services/go.mod ./services/
 RUN go work sync
 COPY libs ./libs
 COPY apps/api ./apps/api
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/skillsignal-api ./apps/api/cmd/api
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/skillsignal-migrate ./apps/api/cmd/api
 
 FROM docker.io/library/alpine:3.22
-COPY --from=build /out/skillsignal-api /skillsignal-api
-COPY apps/api/entrypoint.sh /entrypoint.sh
-RUN chmod 0555 /entrypoint.sh && adduser -D -H -u 65532 app && \
-	mkdir -p /var/lib/skillsignal && chown app:app /var/lib/skillsignal
-EXPOSE 8000
+COPY --from=build /out/skillsignal-migrate /skillsignal-migrate
+RUN adduser -D -H -u 65532 app
 USER app
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/skillsignal-migrate"]

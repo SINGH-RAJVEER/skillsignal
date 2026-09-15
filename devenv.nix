@@ -61,7 +61,7 @@ in
 		CGO_ENABLED=0 go test ./libs/contracts/... ./libs/go-core/... ./apps/api/... ./apps/gateway/... ./apps/worker/... ./services/...
 	'';
 	scripts.go-migrate.exec = ''
-		go run ./apps/api/cmd/api migrate
+		go run ./apps/api/cmd/api
 	'';
 
 	services.postgres = {
@@ -92,7 +92,7 @@ in
 			"export PORT=${servicePorts.identity}"
 			"mkdir -p ${binDir}"
 			"go build -o ${binDir}/migrate ./apps/api/cmd/api"
-			"${binDir}/migrate migrate"
+			"${binDir}/migrate"
 			"go build -o ${binDir}/identity ./services/cmd/identity"
 			"exec ${binDir}/identity"
 		];

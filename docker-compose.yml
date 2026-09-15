@@ -33,14 +33,11 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    command: ["migrate"]
     depends_on:
       db:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/skillsignal
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-      STORAGE_ROOT: /var/lib/skillsignal
     restart: "no"
 
   identity:
