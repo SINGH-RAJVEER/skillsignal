@@ -113,7 +113,9 @@ export const UploadTab = ({
 				</div>
 
 				<p className="form-hint">
-					Choose PDF, DOCX, TXT, ZIP files, or an entire folder. Unsupported files are reported individually and candidate names come from the resumes.
+					Choose PDF, DOCX, TXT, ZIP files, or an entire folder.
+					Unsupported files are reported individually and candidate
+					names come from the resumes.
 				</p>
 			</div>
 

@@ -35,7 +35,9 @@ export const Landing = () => (
 		<section className="public-hero">
 			<h1>Resume evaluation with evidence.</h1>
 			<p className="hero-copy">
-				Scores are only as good as their proof. Every evaluation quotes the lines of the resume that earned it, against requirements you confirmed.
+				Scores are only as good as their proof. Every evaluation quotes
+				the lines of the resume that earned it, against requirements you
+				confirmed.
 			</p>
 		</section>
 
@@ -54,7 +56,8 @@ export const Landing = () => (
 
 		<footer className="public-footer">
 			<span>
-				Evaluations compare one resume submission with one confirmed job version.
+				Evaluations compare one resume submission with one confirmed job
+				version.
 			</span>
 			<Link to="/sign-in">Sign in</Link>
 		</footer>
