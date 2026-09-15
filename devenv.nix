@@ -30,7 +30,7 @@ let
 			processDbUrl
 			"export PORT=${port}"
 			"mkdir -p ${binDir}"
-			"go build -o ${binDir}/${name} ./services/cmd/${name}"
+			"go build -o ${binDir}/${name} ./apps/${name}/cmd/${name}"
 			"exec ${binDir}/${name}"
 		];
 		cwd = config.devenv.root;
@@ -55,13 +55,13 @@ in
 	languages.go.enable = true;
 
 	scripts.go-build.exec = ''
-		go build ./apps/api/cmd/api ./apps/gateway/cmd/gateway ./apps/worker/cmd/worker ./services/cmd/...
+		go build ./apps/migrate/cmd/migrate ./apps/gateway/cmd/gateway ./apps/worker/cmd/worker ./apps/identity/cmd/identity ./apps/hiring/cmd/hiring ./apps/documents/cmd/documents ./apps/evaluation/cmd/evaluation ./apps/billing/cmd/billing
 	'';
 	scripts.go-test.exec = ''
-		CGO_ENABLED=0 go test ./libs/contracts/... ./libs/go-core/... ./apps/api/... ./apps/gateway/... ./apps/worker/... ./services/...
+		CGO_ENABLED=0 go test ./packages/contracts/... ./packages/go-core/... ./apps/migrate/... ./apps/gateway/... ./apps/worker/... ./apps/identity/... ./apps/hiring/... ./apps/documents/... ./apps/evaluation/... ./apps/billing/...
 	'';
 	scripts.go-migrate.exec = ''
-		go run ./apps/api/cmd/api
+		go run ./apps/migrate/cmd/migrate
 	'';
 
 	services.postgres = {
@@ -91,9 +91,9 @@ in
 			processDbUrl
 			"export PORT=${servicePorts.identity}"
 			"mkdir -p ${binDir}"
-			"go build -o ${binDir}/migrate ./apps/api/cmd/api"
+			"go build -o ${binDir}/migrate ./apps/migrate/cmd/migrate"
 			"${binDir}/migrate"
-			"go build -o ${binDir}/identity ./services/cmd/identity"
+			"go build -o ${binDir}/identity ./apps/identity/cmd/identity"
 			"exec ${binDir}/identity"
 		];
 		cwd = config.devenv.root;

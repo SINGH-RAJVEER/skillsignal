@@ -7,6 +7,6 @@ require (
 	github.com/skillsignal/go-core v0.0.0
 )
 
-replace github.com/skillsignal/contracts => ../../libs/contracts
+replace github.com/skillsignal/contracts => ../../packages/contracts
 
-replace github.com/skillsignal/go-core => ../../libs/go-core
+replace github.com/skillsignal/go-core => ../../packages/go-core

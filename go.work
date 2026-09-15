@@ -1,13 +1,21 @@
 go 1.26.0
 
-use ./libs/go-core
+use ./packages/go-core
 
-use ./libs/contracts
+use ./packages/contracts
 
-use ./apps/api
+use ./apps/migrate
 
 use ./apps/gateway
 
 use ./apps/worker
 
-use ./services
+use ./apps/identity
+
+use ./apps/hiring
+
+use ./apps/documents
+
+use ./apps/evaluation
+
+use ./apps/billing

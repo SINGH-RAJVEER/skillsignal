@@ -32,7 +32,7 @@ services:
   migrate:
     build:
       context: .
-      dockerfile: apps/api/Dockerfile
+      dockerfile: apps/migrate/Dockerfile
     depends_on:
       db:
         condition: service_healthy
@@ -44,41 +44,31 @@ services:
     <<: *domain-service
     build:
       context: .
-      dockerfile: services/Dockerfile
-      args:
-        SERVICE: identity
+      dockerfile: apps/identity/Dockerfile
 
   hiring:
     <<: *domain-service
     build:
       context: .
-      dockerfile: services/Dockerfile
-      args:
-        SERVICE: hiring
+      dockerfile: apps/hiring/Dockerfile
 
   documents:
     <<: *domain-service
     build:
       context: .
-      dockerfile: services/Dockerfile
-      args:
-        SERVICE: documents
+      dockerfile: apps/documents/Dockerfile
 
   evaluation:
     <<: *domain-service
     build:
       context: .
-      dockerfile: services/Dockerfile
-      args:
-        SERVICE: evaluation
+      dockerfile: apps/evaluation/Dockerfile
 
   billing:
     <<: *domain-service
     build:
       context: .
-      dockerfile: services/Dockerfile
-      args:
-        SERVICE: billing
+      dockerfile: apps/billing/Dockerfile
 
   gateway:
     build:

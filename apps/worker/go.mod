@@ -18,6 +18,6 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 )
 
-replace github.com/skillsignal/go-core => ../../libs/go-core
+replace github.com/skillsignal/go-core => ../../packages/go-core
 
-replace github.com/skillsignal/contracts => ../../libs/contracts
+replace github.com/skillsignal/contracts => ../../packages/contracts

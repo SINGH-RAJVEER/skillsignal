@@ -14,8 +14,14 @@ build/
 .jj/
 
 # Go service binaries built by `go build ./...`
-/apps/api/api
-/apps/worker/worker
+/apps/*/billing
+/apps/*/documents
+/apps/*/evaluation
+/apps/*/gateway
+/apps/*/hiring
+/apps/*/identity
+/apps/*/migrate
+/apps/*/worker
 
 # Environment files
 .env

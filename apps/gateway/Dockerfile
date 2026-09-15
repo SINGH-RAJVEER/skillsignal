@@ -1,17 +1,16 @@
 FROM docker.io/library/golang:1.26 AS build
 
 WORKDIR /src
-COPY go.work ./
-COPY libs/go-core/go.mod libs/go-core/go.sum ./libs/go-core/
-COPY libs/contracts/go.mod ./libs/contracts/
-COPY apps/api/go.mod apps/api/go.sum ./apps/api/
+COPY packages/contracts/go.mod ./packages/contracts/
+COPY packages/go-core/go.mod packages/go-core/go.sum ./packages/go-core/
 COPY apps/gateway/go.mod ./apps/gateway/
-COPY apps/worker/go.mod apps/worker/go.sum ./apps/worker/
-COPY services/go.mod ./services/
-RUN go work sync
-COPY libs ./libs
+WORKDIR /src/apps/gateway
+RUN GOWORK=off go mod download
+WORKDIR /src
+COPY packages/contracts ./packages/contracts
+COPY packages/go-core ./packages/go-core
 COPY apps/gateway ./apps/gateway
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/gateway ./apps/gateway/cmd/gateway
+RUN cd apps/gateway && GOWORK=off CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/gateway ./cmd/gateway
 
 FROM docker.io/library/alpine:3.22
 COPY --from=build /out/gateway /gateway
