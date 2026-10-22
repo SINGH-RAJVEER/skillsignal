@@ -140,15 +140,13 @@ func SettlePoints(reportedCostUSD *float64, kind string, s Settings) int {
 	return charged
 }
 
-// SettleFromUsage charges from token counts at the price ceilings when the
-// provider reported no usable cost. Mirrors worker/billing.py.
+// SettleFromUsage settles reported cost. Token ceilings apply to quotes only;
+// a free model's zero cost must not become a charge at the quote ceiling.
 func SettleFromUsage(promptTokens, completionTokens int, reportedCostUSD float64, kind string, s Settings) int {
-	cost := reportedCostUSD
-	if cost <= 0 {
-		cost = (float64(promptTokens)*s.PriceCeilingInputPerMil +
-			float64(completionTokens)*s.PriceCeilingOutputPerMil) / 1_000_000
+	if reportedCostUSD < 0 || math.IsNaN(reportedCostUSD) || math.IsInf(reportedCostUSD, 0) {
+		return SettlePoints(nil, kind, s)
 	}
-	return SettlePoints(&cost, kind, s)
+	return SettlePoints(&reportedCostUSD, kind, s)
 }
 
 // WeekStart returns the Monday 00:00 UTC boundary of the calendar week.
