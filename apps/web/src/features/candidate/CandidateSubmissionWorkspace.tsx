@@ -60,7 +60,7 @@ export const CandidateSubmissionWorkspace = () => {
 			);
 			setReceipt({
 				submissionId: result.submissionId,
-				receivedAt: new Date(),
+				receivedAt: new Date(result.receivedAt),
 			});
 			setResume(null);
 		} catch (reason) {

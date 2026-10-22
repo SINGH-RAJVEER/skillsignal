@@ -22,6 +22,16 @@ const PROCESSING_STEPS = [
 const isPendingStatus = (status: IndependentEvaluation["status"]) =>
 	status === "queued" || status === "processing";
 
+const reportScore = (evaluation: IndependentEvaluation) =>
+	evaluation.jobDescriptionProvided
+		? evaluation.score
+		: (evaluation.generalQualityScore ?? evaluation.score);
+
+const reportScoreLabel = (evaluation: IndependentEvaluation) => {
+	const score = reportScore(evaluation);
+	return score === null ? evaluation.status : `${score}/100`;
+};
+
 export const PrivateEvaluationWorkspace = () => {
 	const [isWorking, setIsWorking] = useState(false);
 	const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -384,9 +394,7 @@ export const PrivateEvaluationWorkspace = () => {
 												{evaluation.originalName}
 											</span>
 											<span className="history-meta">
-												{evaluation.score !== null
-													? `${evaluation.score}/100`
-													: evaluation.status}
+												{reportScoreLabel(evaluation)}
 												{" · "}
 												{new Date(
 													evaluation.createdAt,
@@ -537,7 +545,7 @@ const PrivateReport = ({
 						: "Resume readiness"
 				}
 			>
-				<strong>{evaluation.score ?? "–"}</strong>
+				<strong>{reportScore(evaluation) ?? "–"}</strong>
 				<span>
 					of 100{" "}
 					{evaluation.jobDescriptionProvided
@@ -551,7 +559,7 @@ const PrivateReport = ({
 						{evaluation.generalQualityScore ?? "–"}/100.
 					</p>
 				) : (
-					<b>{readinessLabel(evaluation.score)}</b>
+					<b>{readinessLabel(reportScore(evaluation))}</b>
 				)}
 				<p>
 					The score describes this document, not your ability. Missing

@@ -24,17 +24,14 @@ export const candidateClient = {
 		);
 	},
 	independentEvaluation: (evaluationId: string) =>
-		request<IndependentEvaluation>(
-			`/api/independent-evaluations/${evaluationId}`,
-		),
+		independentEvaluation(evaluationId),
 	downloadImprovedResume: (evaluationId: string) =>
 		downloadFile(
 			`/api/independent-evaluations/${evaluationId}/improved-resume`,
 			"corrected-resume.docx",
 			"Corrected resume is not available",
 		),
-	independentEvaluations: () =>
-		request<IndependentEvaluation[]>("/api/independent-evaluations"),
+	independentEvaluations: () => independentEvaluations(),
 	deleteIndependentEvaluation: (evaluationId: string) =>
 		request<void>(`/api/independent-evaluations/${evaluationId}`, {
 			method: "DELETE",
@@ -81,9 +78,8 @@ export const candidateClient = {
 		body.append("file", file);
 		body.append("invitation_token", token);
 		return request<{
-			processingJobId: string;
 			submissionId: string;
-			evaluationId: string;
+			receivedAt: string;
 		}>(`/api/jobs/${jobId}/resumes`, { method: "POST", body });
 	},
 };
@@ -142,6 +138,12 @@ export type IndependentEvaluation = {
 	completedAt: string | null;
 	jobDescriptionProvided?: boolean;
 	hasImprovedResume?: boolean;
+	requirements?: Array<{
+		stableId?: string;
+		id?: string;
+		normalizedText?: string;
+		text?: string;
+	}>;
 	suggestions?: Array<{ title: string; detail: string }>;
 	facts?: {
 		skills?: SkillFact[];
@@ -151,3 +153,44 @@ export type IndependentEvaluation = {
 		warnings?: string[];
 	};
 };
+
+const normalizeIndependentEvaluation = (
+	evaluation: IndependentEvaluation,
+): IndependentEvaluation => {
+	const requirements = new Map(
+		(evaluation.requirements ?? []).map((requirement) => [
+			requirement.stableId ?? requirement.id ?? "",
+			requirement.normalizedText ?? requirement.text ?? "",
+		]),
+	);
+	return {
+		...evaluation,
+		score: evaluation.jobDescriptionProvided
+			? evaluation.score
+			: (evaluation.generalQualityScore ?? evaluation.score),
+		requirementAssessments: (evaluation.requirementAssessments ?? []).map(
+			(assessment, index) => ({
+				...assessment,
+				requirement:
+					assessment.requirement ||
+					requirements.get(assessment.requirementId) ||
+					evaluation.requirements?.[index]?.normalizedText ||
+					evaluation.requirements?.[index]?.text ||
+					assessment.requirementId,
+				evidence: assessment.evidence ?? [],
+			}),
+		),
+	};
+};
+
+const independentEvaluation = async (evaluationId: string) =>
+	normalizeIndependentEvaluation(
+		await request<IndependentEvaluation>(
+			`/api/independent-evaluations/${evaluationId}`,
+		),
+	);
+
+const independentEvaluations = async () =>
+	(
+		await request<IndependentEvaluation[]>("/api/independent-evaluations")
+	).map(normalizeIndependentEvaluation);

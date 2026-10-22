@@ -90,7 +90,7 @@ export const InvitationUpload = () => {
 			);
 			setReceipt({
 				submissionId: result.submissionId,
-				receivedAt: new Date(),
+				receivedAt: new Date(result.receivedAt),
 			});
 		} catch (reason) {
 			setError(
