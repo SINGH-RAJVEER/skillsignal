@@ -19,7 +19,14 @@ func ServiceFor(path string) (string, bool) {
 	switch segments[1] {
 	case "auth", "employer", "demo":
 		return Identity, true
-	case "billing", "me", "payments", "webhooks":
+	case "me":
+		if len(segments) == 2 {
+			return Identity, true
+		}
+		if len(segments) == 3 && segments[2] == "points" {
+			return Billing, true
+		}
+	case "billing", "payments", "webhooks":
 		return Billing, true
 	case "independent-evaluations", "evaluations", "processing":
 		return Evaluation, true

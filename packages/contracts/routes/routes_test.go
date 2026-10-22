@@ -5,6 +5,7 @@ import "testing"
 func TestServiceFor(t *testing.T) {
 	tests := map[string]string{
 		"/api/auth/session":                   Identity,
+		"/api/me":                             Identity,
 		"/api/employer/auth/sign-in/email":    Identity,
 		"/api/organizations/org-1/members":    Identity,
 		"/api/organizations/org-1/jobs":       Hiring,
