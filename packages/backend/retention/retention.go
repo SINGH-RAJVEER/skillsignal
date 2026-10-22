@@ -76,6 +76,9 @@ func Sweep(ctx context.Context, settings config.Settings) (Result, error) {
 	}
 	for _, document := range documents {
 		payload := map[string]any{"documentIds": []string{document.ID}, "versionIds": document.VersionIDs, "now": now}
+		if err := client.Call(ctx, "hiring", "/internal/hiring/prepare-purge-documents", payload, nil); err != nil {
+			return result, err
+		}
 		if err := client.Call(ctx, "evaluation", "/internal/evaluation/purge-documents", payload, nil); err != nil {
 			return result, err
 		}

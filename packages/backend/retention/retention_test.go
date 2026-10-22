@@ -35,7 +35,7 @@ func TestSweepResumesInDependencyOrder(t *testing.T) {
 				t.Setenv(key, server.URL)
 			}
 			result, err := Sweep(context.Background(), config.Settings{JWTSecret: "secret"})
-			want := []string{"/internal/billing/retention", "/internal/evaluation/retention", "/internal/documents/expired", "/internal/evaluation/purge-documents"}
+			want := []string{"/internal/billing/retention", "/internal/evaluation/retention", "/internal/documents/expired", "/internal/hiring/prepare-purge-documents", "/internal/evaluation/purge-documents"}
 			if !failEvaluation {
 				want = append(want, "/internal/hiring/purge-documents", "/internal/documents/document")
 			}
