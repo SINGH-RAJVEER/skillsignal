@@ -20,10 +20,11 @@ import (
 )
 
 type Definition struct {
-	Name           string                              `json:"name"`
-	Owns           []string                            `json:"owns"`
-	RouteGroups    []string                            `json:"routeGroups"`
-	RegisterRoutes func(*http.ServeMux, *pgxpool.Pool) `json:"-"`
+	Name           string                               `json:"name"`
+	Owns           []string                             `json:"owns"`
+	RouteGroups    []string                             `json:"routeGroups"`
+	RegisterRoutes func(*http.ServeMux, *pgxpool.Pool)  `json:"-"`
+	Start          func(context.Context, *pgxpool.Pool) `json:"-"`
 }
 
 func Run(definition Definition) {
@@ -57,6 +58,9 @@ func Run(definition Definition) {
 	})
 	if definition.RegisterRoutes != nil {
 		definition.RegisterRoutes(mux, pool)
+	}
+	if definition.Start != nil {
+		definition.Start(ctx, pool)
 	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		owner, ok := routes.ServiceFor(r.URL.Path)

@@ -60,7 +60,7 @@ func NotImplemented(w http.ResponseWriter, message string) {
 
 const (
 	maxBodyBytes          = 1 << 20
-	maxMultipartBodyBytes = 20 << 20
+	maxMultipartBodyBytes = 21 << 20
 )
 
 // WithBodyLimit rejects oversized JSON and multipart bodies early.
@@ -69,6 +69,12 @@ func WithBodyLimit(next http.Handler) http.Handler {
 		limit := int64(maxBodyBytes)
 		if strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
 			limit = int64(maxMultipartBodyBytes)
+			if strings.Contains(r.URL.Path, "/resume-batches") {
+				limit = 502 << 20
+			}
+		}
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			limit = 32 << 20
 		}
 		if r.ContentLength > limit {
 			WriteError(w, http.StatusBadRequest, CodeInvalidRequest, "invalid JSON body")
@@ -94,7 +100,7 @@ func WithOriginGuard(webURL string) func(http.Handler) http.Handler {
 				w.Header().Set("Vary", "Origin")
 			}
 			if r.Method == http.MethodOptions {
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Max-Age", "600")
 				w.WriteHeader(http.StatusNoContent)
@@ -121,8 +127,18 @@ func WithLogging(next http.Handler) http.Handler {
 		started := time.Now()
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		defer func() {
-			log.Printf("%s %s %d %s", r.Method, r.URL.Path, recorder.status, time.Since(started).Truncate(time.Millisecond))
+			log.Printf("%s %s %d %s", r.Method, logPath(r.URL.Path), recorder.status, time.Since(started).Truncate(time.Millisecond))
 		}()
 		next.ServeHTTP(recorder, r)
 	})
+}
+
+func logPath(path string) string {
+	segments := strings.Split(path, "/")
+	for i := range segments {
+		if i > 0 && segments[i-1] == "invitations" && segments[i] != "redeem" {
+			segments[i] = "[invitation]"
+		}
+	}
+	return strings.Join(segments, "/")
 }

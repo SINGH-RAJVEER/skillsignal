@@ -19,7 +19,7 @@ func ServiceFor(path string) (string, bool) {
 	switch segments[1] {
 	case "auth", "employer", "demo":
 		return Identity, true
-	case "billing", "me", "payments":
+	case "billing", "me", "payments", "webhooks":
 		return Billing, true
 	case "independent-evaluations", "evaluations", "processing":
 		return Evaluation, true
@@ -34,14 +34,17 @@ func ServiceFor(path string) (string, bool) {
 		return Identity, true
 	case "jobs":
 		for _, segment := range segments[2:] {
-			if segment == "evaluations" {
+			if segment == "evaluations" || segment == "evaluations.csv" {
 				return Evaluation, true
 			}
 		}
 		return Hiring, true
 	case "admin":
-		if len(segments) >= 3 && segments[2] == "enterprise" {
+		if len(segments) >= 3 && (segments[2] == "enterprise" || segments[2] == "organizations") {
 			return Billing, true
+		}
+		if len(segments) >= 3 && segments[2] == "retention" {
+			return Documents, true
 		}
 	}
 	return "", false
