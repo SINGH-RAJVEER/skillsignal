@@ -30,13 +30,16 @@ type BillingSettings struct {
 
 // OpenRouterSettings carries model selection and client limits.
 type OpenRouterSettings struct {
-	APIKey          string
-	BaseURL         string
-	ExtractionModel string
-	AssessmentModel string
-	EmbeddingModel  string
-	TimeoutSeconds  float64
-	MaxOutputTokens int
+	APIKey              string
+	BaseURL             string
+	ExtractionModel     string
+	AssessmentModel     string
+	EmbeddingModel      string
+	ExtractionFallbacks []string
+	AssessmentFallbacks []string
+	EmbeddingFallbacks  []string
+	TimeoutSeconds      float64
+	MaxOutputTokens     int
 }
 
 // Settings is the shared API/worker configuration.
@@ -204,11 +207,14 @@ func Load() (Settings, error) {
 	}
 
 	openrouter := OpenRouterSettings{
-		APIKey:          os.Getenv("OPENROUTER_API_KEY"),
-		BaseURL:         envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-		ExtractionModel: envOr("OPENROUTER_EXTRACTION_MODEL", "openai/gpt-5-mini"),
-		AssessmentModel: envOr("OPENROUTER_ASSESSMENT_MODEL", "openai/gpt-5-mini"),
-		EmbeddingModel:  envOr("OPENROUTER_EMBEDDING_MODEL", "qwen/qwen3-embedding-8b"),
+		APIKey:              os.Getenv("OPENROUTER_API_KEY"),
+		BaseURL:             envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+		ExtractionModel:     envOr("OPENROUTER_EXTRACTION_MODEL", "openai/gpt-5-mini"),
+		AssessmentModel:     envOr("OPENROUTER_ASSESSMENT_MODEL", "openai/gpt-5-mini"),
+		EmbeddingModel:      envOr("OPENROUTER_EMBEDDING_MODEL", "qwen/qwen3-embedding-8b"),
+		ExtractionFallbacks: modelList(os.Getenv("OPENROUTER_EXTRACTION_FALLBACKS")),
+		AssessmentFallbacks: modelList(os.Getenv("OPENROUTER_ASSESSMENT_FALLBACKS")),
+		EmbeddingFallbacks:  modelList(os.Getenv("OPENROUTER_EMBEDDING_FALLBACKS")),
 	}
 	if openrouter.TimeoutSeconds, err = floatOr("OPENROUTER_TIMEOUT_SECONDS", "90"); err != nil {
 		return Settings{}, err
@@ -224,4 +230,17 @@ func Load() (Settings, error) {
 // LLMEnabled reports whether model-backed extraction is configured.
 func (s Settings) LLMEnabled() bool {
 	return s.OpenRouter.APIKey != ""
+}
+
+func modelList(value string) []string {
+	var models []string
+	seen := make(map[string]bool)
+	for _, model := range strings.Split(value, ",") {
+		model = strings.TrimSpace(model)
+		if model != "" && !seen[model] {
+			models = append(models, model)
+			seen[model] = true
+		}
+	}
+	return models
 }
