@@ -197,8 +197,21 @@ export const workspaceClient = {
 	exportEvaluationsCsv: async (
 		jobId: string,
 		exportOptions: { columns?: ExportColumn[]; labels?: string[] } = {},
+		filters: EvaluationFilters = {},
 	) => {
 		const params = new URLSearchParams();
+		for (const value of filters.eligibility ?? [])
+			params.append("eligibility", value);
+		for (const value of filters.status ?? [])
+			params.append("status", value);
+		for (const value of filters.outcome ?? [])
+			params.append("outcome", value);
+		if (filters.minimumScore !== undefined)
+			params.set("minimum_score", String(filters.minimumScore));
+		if (filters.minimumCoverage !== undefined)
+			params.set("minimum_coverage", String(filters.minimumCoverage));
+		if (filters.search?.trim()) params.set("search", filters.search.trim());
+		if (filters.skill?.trim()) params.set("skill", filters.skill.trim());
 		for (const column of exportOptions.columns ?? []) {
 			params.append("columns", column);
 		}

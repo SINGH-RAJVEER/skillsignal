@@ -9,7 +9,14 @@ import {
 	UploadCloud,
 	X,
 } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import {
+	type FormEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
+import { useSearchParams } from "react-router-dom";
 import { ThinkingOrb } from "thinking-orbs";
 import { authClient } from "../../lib/auth-client";
 import {
@@ -44,6 +51,7 @@ import {
 import { UploadTab } from "./upload-tab";
 
 export const Workspace = () => {
+	const [searchParams, setSearchParams] = useSearchParams();
 	const { data: session, isPending } = authClient.useSession();
 	const [organization, setOrganization] = useState<Organization | null>(null);
 	const organizationId = organization?.id ?? "";
@@ -66,18 +74,85 @@ export const Workspace = () => {
 	const [copiedInvitation, setCopiedInvitation] = useState(false);
 	const [isWindowOpen, setIsWindowOpen] = useState(false);
 	const [isMembersOpen, setIsMembersOpen] = useState(false);
-	const [evaluationQuery, setEvaluationQuery] = useState("");
+	const [evaluationQuery, setEvaluationQuery] = useState(
+		searchParams.get("search") ?? "",
+	);
 	const [eligibilityFilter, setEligibilityFilter] =
-		useState<EligibilityFilter>("top");
-	const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>("all");
-	const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-	const [skillFilter, setSkillFilter] = useState("");
-	const [minimumScoreText, setMinimumScoreText] = useState("");
+		useState<EligibilityFilter>(
+			(searchParams.get("eligibility") as EligibilityFilter) ?? "top",
+		);
+	const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>(
+		(searchParams.get("outcome") as OutcomeFilter) ?? "all",
+	);
+	const [statusFilter, setStatusFilter] = useState<StatusFilter>(
+		(searchParams.get("status") as StatusFilter) ?? "all",
+	);
+	const [skillFilter, setSkillFilter] = useState(
+		searchParams.get("skill") ?? "",
+	);
+	const [minimumScoreText, setMinimumScoreText] = useState(
+		searchParams.get("minimum_score") ?? "",
+	);
+	const [pendingCount, setPendingCount] = useState(0);
 	const [isExportOpen, setIsExportOpen] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [isConfirming, setIsConfirming] = useState(false);
 	const [isUploading, setIsUploading] = useState(false);
+	const evaluationFilters = useMemo(() => {
+		const filters: EvaluationFilters = {};
+		if (eligibilityFilter === "top") filters.eligibility = ["eligible"];
+		else if (eligibilityFilter !== "all")
+			filters.eligibility = [eligibilityFilter];
+		if (outcomeFilter !== "all") filters.outcome = [outcomeFilter];
+		if (statusFilter !== "all") filters.status = [statusFilter];
+		if (skillFilter.trim()) filters.skill = skillFilter.trim();
+		if (evaluationQuery.trim()) filters.search = evaluationQuery.trim();
+		if (
+			minimumScoreText.trim() !== "" &&
+			Number.isFinite(Number(minimumScoreText))
+		) {
+			filters.minimumScore = Math.min(
+				100,
+				Math.max(0, Math.round(Number(minimumScoreText))),
+			);
+		}
+		return filters;
+	}, [
+		eligibilityFilter,
+		outcomeFilter,
+		statusFilter,
+		skillFilter,
+		evaluationQuery,
+		minimumScoreText,
+	]);
+
+	useEffect(() => {
+		const next = new URLSearchParams(searchParams);
+		for (const [key, value] of Object.entries({
+			search: evaluationQuery,
+			eligibility: eligibilityFilter,
+			outcome: outcomeFilter,
+			status: statusFilter,
+			skill: skillFilter,
+			minimum_score: minimumScoreText,
+		})) {
+			if (value && value !== "all" && value !== "top")
+				next.set(key, value);
+			else next.delete(key);
+		}
+		if (next.toString() !== searchParams.toString())
+			setSearchParams(next, { replace: true });
+	}, [
+		evaluationQuery,
+		eligibilityFilter,
+		outcomeFilter,
+		statusFilter,
+		skillFilter,
+		minimumScoreText,
+		searchParams,
+		setSearchParams,
+	]);
 
 	const reportError = useCallback((reason: unknown) => {
 		setNotice(null);
@@ -95,40 +170,16 @@ export const Workspace = () => {
 
 	const refreshEvaluations = useCallback(
 		async (jobId: string) => {
-			const filters: EvaluationFilters = {};
-			if (eligibilityFilter === "top") {
-				filters.eligibility = ["eligible", "needs_review", "pending"];
-			} else if (eligibilityFilter !== "all") {
-				filters.eligibility = [eligibilityFilter];
-			}
-			if (outcomeFilter !== "all") {
-				filters.outcome = [outcomeFilter];
-			}
-			if (statusFilter !== "all") {
-				filters.status = [statusFilter];
-			}
-			if (skillFilter.trim()) {
-				filters.skill = skillFilter;
-			}
-			const parsedScore = Number(minimumScoreText);
-			if (
-				minimumScoreText.trim() !== "" &&
-				Number.isFinite(parsedScore)
-			) {
-				filters.minimumScore = Math.min(
-					100,
-					Math.max(0, Math.round(parsedScore)),
-				);
-			}
-			setEvaluations(await workspaceClient.evaluations(jobId, filters));
+			const [results, pending] = await Promise.all([
+				workspaceClient.evaluations(jobId, evaluationFilters),
+				workspaceClient.evaluations(jobId, {
+					status: ["pending", "processing"],
+				}),
+			]);
+			setEvaluations(results);
+			setPendingCount(pending.length);
 		},
-		[
-			eligibilityFilter,
-			minimumScoreText,
-			outcomeFilter,
-			skillFilter,
-			statusFilter,
-		],
+		[evaluationFilters],
 	);
 
 	const openJob = useCallback(
@@ -208,11 +259,13 @@ export const Workspace = () => {
 
 	// Terminal states never change, so polling must stop once every
 	// evaluation is complete or failed.
-	const hasPendingEvaluations = evaluations.some(
-		(evaluation) =>
-			evaluation.status === "pending" ||
-			evaluation.status === "processing",
-	);
+	const hasPendingEvaluations =
+		pendingCount > 0 ||
+		evaluations.some(
+			(evaluation) =>
+				evaluation.status === "pending" ||
+				evaluation.status === "processing",
+		);
 
 	useEffect(() => {
 		if (!selectedJob || !hasPendingEvaluations) return;
@@ -817,6 +870,7 @@ export const Workspace = () => {
 			{isExportOpen && selectedJob && (
 				<ExportDialog
 					jobId={selectedJob.id}
+					filters={evaluationFilters}
 					onDismiss={() => setIsExportOpen(false)}
 					onError={reportError}
 				/>

@@ -127,6 +127,16 @@ export type IndependentEvaluation = {
 	originalName: string;
 	status: "queued" | "processing" | "complete" | "failed";
 	score: number | null;
+	generalQualityScore?: number | null;
+	evidenceCoverage?: number | null;
+	requirementAssessments?: Array<{
+		requirementId: string;
+		requirement: string;
+		outcome: "met" | "partial" | "not_met" | "unknown";
+		confidence: number;
+		reasoning: string;
+		evidence: Array<{ blockId: string; quote: string }>;
+	}>;
 	safeError: string | null;
 	createdAt: string;
 	completedAt: string | null;

@@ -2,17 +2,24 @@ import { Button } from "@skillsignal/ui/components/button";
 import { Input } from "@skillsignal/ui/components/input";
 import { ArrowDown, ArrowUp, Download, X } from "lucide-react";
 import { useState } from "react";
-import { EXPORT_COLUMNS, type ExportColumn, workspaceClient } from "./client";
+import {
+	type EvaluationFilters,
+	EXPORT_COLUMNS,
+	type ExportColumn,
+	workspaceClient,
+} from "./client";
 import { overlayBackdrop } from "./shared";
 
 type ExportDialogProps = {
 	jobId: string;
+	filters: EvaluationFilters;
 	onDismiss: () => void;
 	onError: (reason: unknown) => void;
 };
 
 export const ExportDialog = ({
 	jobId,
+	filters,
 	onDismiss,
 	onError,
 }: ExportDialogProps) => {
@@ -42,12 +49,16 @@ export const ExportDialog = ({
 		if (isExporting) return;
 		setIsExporting(true);
 		try {
-			await workspaceClient.exportEvaluationsCsv(jobId, {
-				columns: selection,
-				labels: selection.map(
-					(column) => labels[column]?.trim() || column,
-				),
-			});
+			await workspaceClient.exportEvaluationsCsv(
+				jobId,
+				{
+					columns: selection,
+					labels: selection.map(
+						(column) => labels[column]?.trim() || column,
+					),
+				},
+				filters,
+			);
 			onDismiss();
 		} catch (reason) {
 			onError(reason);
@@ -69,9 +80,7 @@ export const ExportDialog = ({
 					Choose, reorder, and rename the exported columns.
 				</p>
 				<ul className="export-columns">
-					{EXPORT_COLUMNS.filter((column) =>
-						selection.includes(column),
-					).map((column, index) => (
+					{selection.map((column, index) => (
 						<li className="export-column-row" key={column}>
 							<span className="export-column-index">
 								{index + 1}

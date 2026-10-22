@@ -529,15 +529,60 @@ const PrivateReport = ({
 						: null}
 				</span>
 			</header>
-			<section className="report-score" aria-label="Resume readiness">
+			<section
+				className="report-score"
+				aria-label={
+					evaluation.jobDescriptionProvided
+						? "Documented role fit"
+						: "Resume readiness"
+				}
+			>
 				<strong>{evaluation.score ?? "–"}</strong>
-				<span>of 100 resume readiness</span>
-				<b>{readinessLabel(evaluation.score)}</b>
+				<span>
+					of 100{" "}
+					{evaluation.jobDescriptionProvided
+						? "documented role fit"
+						: "resume readiness"}
+				</span>
+				{evaluation.jobDescriptionProvided ? (
+					<p>
+						Evidence coverage: {evaluation.evidenceCoverage ?? 0}%.
+						General resume quality:{" "}
+						{evaluation.generalQualityScore ?? "–"}/100.
+					</p>
+				) : (
+					<b>{readinessLabel(evaluation.score)}</b>
+				)}
 				<p>
 					The score describes this document, not your ability. Missing
 					evidence is not treated as a proven lack of experience.
 				</p>
 			</section>
+			{(evaluation.requirementAssessments?.length ?? 0) > 0 && (
+				<section className="report-section">
+					<h4>Job requirement evidence</h4>
+					{evaluation.requirementAssessments?.map((assessment) => (
+						<div
+							className="suggestion-row"
+							key={assessment.requirementId}
+						>
+							<b>{assessment.requirement}</b>
+							<p>
+								{assessment.outcome.replace(/_/g, " ")}.{" "}
+								{assessment.reasoning}
+							</p>
+							{assessment.evidence.map((item) => (
+								<blockquote
+									key={`${item.blockId}-${item.quote}`}
+								>
+									{item.quote}
+									<cite>Source block: {item.blockId}</cite>
+								</blockquote>
+							))}
+						</div>
+					))}
+				</section>
+			)}
 
 			{warnings.length > 0 && (
 				<section className="report-section report-warnings">
