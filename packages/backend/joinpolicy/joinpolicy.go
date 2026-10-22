@@ -20,7 +20,7 @@ var PublicEmailDomains = map[string]struct{}{
 	"yandex.com": {},
 }
 
-var domainPattern = regexp.MustCompile(`^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$`)
+var labelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // NormalizeDomain lowercases, strips a leading @, and rejects public or
 // malformed domains.
@@ -33,8 +33,14 @@ func NormalizeDomain(domain string) (string, error) {
 	if _, public := PublicEmailDomains[normalized]; public {
 		return "", ErrInvalidDomain
 	}
-	if !domainPattern.MatchString(normalized) {
+	labels := strings.Split(normalized, ".")
+	if len(normalized) > 253 || len(labels) < 2 {
 		return "", ErrInvalidDomain
+	}
+	for _, label := range labels {
+		if !labelPattern.MatchString(label) {
+			return "", ErrInvalidDomain
+		}
 	}
 	return normalized, nil
 }
