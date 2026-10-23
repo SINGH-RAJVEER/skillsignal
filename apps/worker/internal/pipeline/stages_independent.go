@@ -4,7 +4,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,12 +12,13 @@ import (
 	"github.com/skillsignal/backend/versions"
 	"github.com/skillsignal/contracts/jobs"
 	parser "github.com/skillsignal/worker/internal/docparse"
+	"github.com/skillsignal/worker/internal/evaluator"
 	"github.com/skillsignal/worker/internal/extractor"
 	"github.com/skillsignal/worker/internal/independent"
 	"github.com/skillsignal/worker/internal/modelschemas"
-	"github.com/skillsignal/worker/internal/openrouter"
 	"github.com/skillsignal/worker/internal/prompts"
 	"github.com/skillsignal/worker/internal/renderer"
+	"github.com/skillsignal/worker/internal/semantic"
 )
 
 func (w *Worker) parseTimeout() time.Duration {
@@ -121,6 +122,9 @@ func (w *Worker) parseIndependentEvaluation(ctx context.Context, job *ClaimedJob
 }
 
 func (w *Worker) enrichIndependentEvaluation(ctx context.Context, job *ClaimedJob) error {
+	if w.models == nil {
+		return &NonRetryableError{Message: "Inference is not configured"}
+	}
 	var artifactJSON, factsJSON []byte
 	var jobDescription *string
 	err := w.pool.QueryRow(ctx,
@@ -142,66 +146,104 @@ func (w *Worker) enrichIndependentEvaluation(ctx context.Context, job *ClaimedJo
 	if jobDescription != nil {
 		description = *jobDescription
 	}
-	modelUsed := false
-	if w.models != nil {
-		raw, err := w.models.CompleteJSON(
-			w.settings.OpenRouter.ExtractionModel,
-			prompts.ExtractionSystemPrompt,
-			[]any{map[string]any{"type": "text", "text": "<resume_document>\n" + extractor.BlocksDocument(doc.Blocks) + "\n</resume_document>"}},
-			"resume_facts",
-			modelschemas.ResumeFacts(),
-			w.settings.OpenRouter.MaxOutputTokens,
-		)
+	redactedBlocks := scoringBlocks(doc.Blocks)
+	raw, err := w.models.CompleteJSON(
+		w.settings.OpenRouter.ExtractionModel,
+		prompts.ExtractionSystemPrompt,
+		[]any{map[string]any{"type": "text", "text": "<resume_document>\n" + extractor.BlocksDocument(redactedBlocks) + "\n</resume_document>"}},
+		"resume_facts",
+		modelschemas.ResumeFacts(),
+		w.settings.OpenRouter.MaxOutputTokens,
+	)
+	if err != nil {
+		return w.modelFailure(job, "Resume fact extraction", err)
+	}
+	validated, err := extractor.ValidateExtraction(raw, extractor.BlockTexts(redactedBlocks))
+	if err != nil {
+		return &NonRetryableError{Message: "Resume extraction failed validation"}
+	}
+	merged, err := extractor.MergeFacts(normalizedFacts, validated, doc.Blocks)
+	if err != nil {
+		return err
+	}
+	facts := addDocumentWarnings(merged, doc.Quality.Warnings)
+	generalScore, suggestions := independent.Report(facts, description)
+	roleScore, coverage, requirements, assessments := independent.RoleReport(description, facts)
+	if len(requirements) > 0 {
+		texts := make([]string, 0, len(redactedBlocks))
+		for _, block := range redactedBlocks {
+			texts = append(texts, block.Text)
+		}
+		vectors, model, err := w.models.EmbedTextsWithModel(w.settings.OpenRouter.EmbeddingModel, texts)
 		if err != nil {
-			if _, ok := err.(*openrouter.RetryableError); ok {
-				if rerr := w.requeueOrDegrade(job, "Resume fact extraction", err); rerr != nil {
-					return rerr
-				}
+			return w.modelFailure(job, "Private report evidence embedding", err)
+		}
+		blockVectors := make(map[string][]float64, len(vectors))
+		for index, block := range redactedBlocks {
+			blockVectors[block.ID] = vectors[index]
+		}
+		blockTexts := extractor.BlockTexts(redactedBlocks)
+		deterministic := evaluator.Evaluate(facts, requirements)
+		var refined []map[string]any
+		for _, requirement := range requirements {
+			if requirement["assessability"] != "resume_evidence" {
+				continue
 			}
-			log.Printf("job %s: model extraction failed; using deterministic facts: %v", job.ID, err)
-			normalizedFacts = addDocumentWarnings(normalizedFacts, []string{DeterministicExtractionWarning})
-		} else {
-			validated, err := extractor.ValidateExtraction(raw, extractor.BlockTexts(doc.Blocks))
+			query, err := w.models.EmbedTextsExact(model, []string{requirement["normalizedText"].(string)})
 			if err != nil {
-				log.Printf("job %s: model extraction failed; using deterministic facts: %v", job.ID, err)
-				normalizedFacts = addDocumentWarnings(normalizedFacts, []string{DeterministicExtractionWarning})
-			} else {
-				merged, err := extractor.MergeFacts(normalizedFacts, validated, doc.Blocks)
-				if err != nil {
-					return err
+				return w.modelFailure(job, "Private report evidence retrieval", err)
+			}
+			retrieved := make(map[string]string)
+			for _, match := range semantic.TopSemanticMatches(query[0], blockVectors) {
+				retrieved[match.BlockID] = blockTexts[match.BlockID]
+			}
+			id := requirement["id"].(string)
+			for _, assessment := range deterministic.Assessments {
+				if assessment.RequirementID != id {
+					continue
 				}
-				facts := addDocumentWarnings(merged, doc.Quality.Warnings)
-				score, suggestions := independent.Report(facts, description)
-				var extra []map[string]any
-				if rawSuggestions, ok := validated["suggestions"].([]any); ok {
-					for _, item := range rawSuggestions {
-						if entry, ok := item.(map[string]any); ok {
-							extra = append(extra, entry)
-						}
+				for _, evidence := range assessment.Evidence {
+					if text := blockTexts[evidence.BlockID]; text != "" {
+						retrieved[evidence.BlockID] = text
 					}
 				}
-				return w.storeIndependentReport(ctx, job, facts, score,
-					extractor.MergeSuggestions(suggestions, extra, 10),
-					true, nullableIfEmpty(description))
+			}
+			validated, err := w.assessCriterion(job, requirement, retrieved)
+			if err != nil {
+				return err
+			}
+			refined = append(refined, validated...)
+		}
+		result := evaluator.Summarize(evaluator.RefineAssessments(deterministic.Assessments, refined, requirements), requirements)
+		roleScore, coverage, assessments = result.Score, result.EvidenceCoverage, independent.AssessmentMaps(result.Assessments)
+	}
+	var extra []map[string]any
+	if rawSuggestions, ok := validated["suggestions"].([]any); ok {
+		for _, item := range rawSuggestions {
+			if entry, ok := item.(map[string]any); ok {
+				extra = append(extra, entry)
 			}
 		}
-	} else {
-		normalizedFacts = addDocumentWarnings(normalizedFacts, []string{DeterministicExtractionWarning})
 	}
-	score, suggestions := independent.Report(normalizedFacts, description)
-	return w.storeIndependentReport(ctx, job, normalizedFacts,
-		score, suggestions, modelUsed, nullableIfEmpty(description))
+	return w.storeIndependentReport(ctx, job, facts, generalScore, roleScore, coverage, requirements, assessments,
+		extractor.MergeSuggestions(suggestions, extra, 10), true, nullableIfEmpty(description))
 }
 
-func (w *Worker) storeIndependentReport(ctx context.Context, job *ClaimedJob, facts map[string]any, score int, suggestions []map[string]any, modelUsed bool, jobDescription *string) error {
-	improvedKey := "independent-resumes/improved/" + job.PayloadReference + ".docx"
+func (w *Worker) storeIndependentReport(ctx context.Context, job *ClaimedJob, facts map[string]any, generalScore int, roleScore *int, coverage int, requirements, assessments, suggestions []map[string]any, modelUsed bool, jobDescription *string) (err error) {
+	improvedKey := "independent-resumes/improved/" + job.PayloadReference + "/" + job.LeaseToken + ".docx"
+	committed := false
+	defer func() {
+		if !committed {
+			if cleanupErr := w.store.Delete(improvedKey); cleanupErr != nil {
+				err = errors.Join(err, &RetryableError{Message: "Corrected resume cleanup failed"})
+			}
+		}
+	}()
 	rendered, err := renderer.RenderResumeDocx(facts, suggestions)
 	if err != nil {
-		log.Printf("job %s: corrected resume rendering failed: %v", job.ID, err)
-		improvedKey = ""
+		return &NonRetryableError{Message: "Corrected resume rendering failed"}
 	} else if err := w.store.Put(improvedKey, rendered); err != nil {
-		log.Printf("job %s: corrected resume storage failed: %v", job.ID, err)
-		improvedKey = ""
+		return &RetryableError{Message: "Corrected resume storage failed"}
 	}
 	var improvedKeyPtr *string
 	if improvedKey != "" {
@@ -217,27 +259,45 @@ func (w *Worker) storeIndependentReport(ctx context.Context, job *ClaimedJob, fa
 		return err
 	}
 	defer tx.Rollback(ctx)
+	active, err := lockLease(ctx, tx, job)
+	if err != nil || !active {
+		return err
+	}
 	var reservationID *string
+	if err := w.persistModelCallsTx(ctx, tx, job); err != nil {
+		return err
+	}
+	var score any
+	var coverageValue any
+	if roleScore != nil {
+		score = *roleScore
+	}
+	if jobDescription != nil {
+		coverageValue = coverage
+	}
 	err = tx.QueryRow(ctx,
 		`UPDATE independent_evaluation
-		 SET status = 'complete', score = $1,
-		     suggestions = CAST($2 AS jsonb),
-		     normalized_facts = CAST($3 AS jsonb),
-		     job_description = COALESCE(job_description, $4),
-		     improved_resume_key = $5,
+		 SET status = 'complete', score = $1, general_quality_score = $2,
+		     evidence_coverage = $3, requirements = CAST($4 AS jsonb),
+		     requirement_assessments = CAST($5 AS jsonb),
+		     suggestions = CAST($6 AS jsonb),
+		     normalized_facts = CAST($7 AS jsonb),
+		     job_description = COALESCE(job_description, $8),
+		     improved_resume_key = $9,
 		     improved_resume_unlocked_at = now(),
-		     parser_version = $6,
-		     parser_configuration_version = $7,
-		     schema_version = $8,
-		     extraction_prompt_version = $9,
-		     scoring_policy_version = $10,
+		     parser_version = $10,
+		     parser_configuration_version = $11,
+		     schema_version = $12,
+		     extraction_prompt_version = $13,
+		     scoring_policy_version = $14,
 		     safe_error = NULL, completed_at = now()
-		 WHERE id = $11
+		 WHERE id = $15
 		   AND EXISTS (
 		       SELECT 1 FROM processing_job
-		       WHERE id = $12 AND lease_token = $13 AND lease_expires_at > now())
+		       WHERE id = $16 AND lease_token = $17 AND status = 'processing' AND lease_expires_at > now())
 		 RETURNING point_reservation_id`,
-		score, marshalJSON(suggestions), marshalJSON(facts), jobDescription,
+		score, generalScore, coverageValue, marshalJSON(requirements), marshalJSON(assessments),
+		marshalJSON(suggestions), marshalJSON(facts), jobDescription,
 		improvedKeyPtr, versions.LocalParserVersion, versions.ParserConfigurationVersion,
 		versions.ResumeFactsSchemaVersion, extractionPromptVersion,
 		versions.ScoringPolicyVersion,
@@ -256,7 +316,14 @@ func (w *Worker) storeIndependentReport(ctx context.Context, job *ClaimedJob, fa
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	if err := completeReportJob(ctx, tx, job); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func (w *Worker) modelUsage() (int, int, float64) {

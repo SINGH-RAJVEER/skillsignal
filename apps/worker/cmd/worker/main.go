@@ -38,6 +38,9 @@ func main() {
 	if role == jobs.ParserRole && settings.LLMEnabled() {
 		log.Fatal("parser worker must not receive OPENROUTER_API_KEY")
 	}
+	if role == jobs.InferenceRole && !settings.LLMEnabled() {
+		log.Fatal("inference worker requires OPENROUTER_API_KEY")
+	}
 	log.Printf("SkillSignal %s worker starting (poll %.1fs, lease %ds, llm=%t)",
 		role, settings.WorkerPollIntervalSeconds, settings.WorkerLeaseSeconds, settings.LLMEnabled())
 	pipeline.New(pool, settings, store, role).Run(ctx)

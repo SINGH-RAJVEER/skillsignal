@@ -4,7 +4,6 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -14,7 +13,6 @@ import (
 	parser "github.com/skillsignal/worker/internal/docparse"
 	"github.com/skillsignal/worker/internal/extractor"
 	"github.com/skillsignal/worker/internal/modelschemas"
-	"github.com/skillsignal/worker/internal/openrouter"
 	"github.com/skillsignal/worker/internal/prompts"
 	"github.com/skillsignal/worker/internal/semantic"
 )
@@ -49,8 +47,11 @@ func (w *Worker) parseResume(ctx context.Context, job *ClaimedJob) error {
 	if err != nil {
 		return err
 	}
-	if !stored || doc.Quality.State != "ready" {
+	if !stored {
 		return nil
+	}
+	if doc.Quality.State != "ready" {
+		return &NonRetryableError{Message: documentQualityError("Resume", doc.Quality.Warnings)}
 	}
 	return w.queueFollowupJob(ctx, job, jobs.ResumeEnrich)
 }
@@ -62,29 +63,23 @@ func (w *Worker) enrichResume(ctx context.Context, job *ClaimedJob) error {
 	}
 	var extractedFacts map[string]any
 	if w.models == nil {
-		normalizedFacts = addDocumentWarnings(normalizedFacts, []string{DeterministicExtractionWarning})
+		return &NonRetryableError{Message: "Inference is not configured"}
 	} else {
+		redactedBlocks := scoringBlocks(doc.Blocks)
 		raw, err := w.models.CompleteJSON(
 			w.settings.OpenRouter.ExtractionModel,
 			prompts.ExtractionSystemPrompt,
-			[]any{map[string]any{"type": "text", "text": "<resume_document>\n" + extractor.BlocksDocument(doc.Blocks) + "\n</resume_document>"}},
+			[]any{map[string]any{"type": "text", "text": "<resume_document>\n" + extractor.BlocksDocument(redactedBlocks) + "\n</resume_document>"}},
 			"resume_facts",
 			modelschemas.ResumeFacts(),
 			w.settings.OpenRouter.MaxOutputTokens,
 		)
 		if err != nil {
-			if _, ok := err.(*openrouter.RetryableError); ok {
-				if rerr := w.requeueOrDegrade(job, "Resume fact extraction", err); rerr != nil {
-					return rerr
-				}
-			}
-			log.Printf("job %s: model extraction failed; using deterministic facts: %v", job.ID, err)
-			normalizedFacts = addDocumentWarnings(normalizedFacts, []string{DeterministicExtractionWarning})
+			return w.modelFailure(job, "Resume fact extraction", err)
 		} else {
-			validated, err := extractor.ValidateExtraction(raw, extractor.BlockTexts(doc.Blocks))
+			validated, err := extractor.ValidateExtraction(raw, extractor.BlockTexts(redactedBlocks))
 			if err != nil {
-				log.Printf("job %s: model extraction failed; using deterministic facts: %v", job.ID, err)
-				normalizedFacts = addDocumentWarnings(normalizedFacts, []string{DeterministicExtractionWarning})
+				return &NonRetryableError{Message: "Resume extraction failed validation"}
 			} else {
 				extractedFacts = validated
 				merged, err := extractor.MergeFacts(normalizedFacts, validated, doc.Blocks)
@@ -139,6 +134,10 @@ func (w *Worker) storeEnrichedResume(ctx context.Context, job *ClaimedJob, struc
 		return false, err
 	}
 	defer tx.Rollback(ctx)
+	active, err := lockLease(ctx, tx, job)
+	if err != nil || !active {
+		return false, err
+	}
 	var id string
 	err = tx.QueryRow(ctx,
 		`UPDATE resume_version
@@ -182,6 +181,10 @@ func (w *Worker) storeParsedResume(ctx context.Context, job *ClaimedJob, doc par
 		return false, err
 	}
 	defer tx.Rollback(ctx)
+	active, err := lockLease(ctx, tx, job)
+	if err != nil || !active {
+		return false, err
+	}
 	structured := map[string]any{}
 	if structuredFacts != nil {
 		structured = structuredFacts
@@ -221,42 +224,14 @@ func (w *Worker) storeParsedResume(ctx context.Context, job *ClaimedJob, doc par
 	if doc.Quality.State != "ready" {
 		if _, err := tx.Exec(ctx,
 			`UPDATE evaluation
-			 SET status = 'complete', score = NULL, evidence_coverage = NULL,
+			 SET status = 'failed', score = NULL, evidence_coverage = NULL,
 			     eligibility = 'needs_review', quality_state = $1, completed_at = now()
 			 WHERE resume_version_id = $2`,
 			doc.Quality.State, job.PayloadReference); err != nil {
 			return false, err
 		}
-		// Parsing and review delivery happened even without scoring, so
-		// employer holds settle at the minimum charge.
-		rows, err := tx.Query(ctx,
-			`SELECT id FROM point_reservation
-			 WHERE state = 'reserved' AND id IN (
-			     SELECT point_reservation_id FROM evaluation
-			     WHERE resume_version_id = $1 AND point_reservation_id IS NOT NULL)`,
-			job.PayloadReference)
-		if err != nil {
+		if err := releaseEvaluationReservations(ctx, tx, "resume_version_id = $1", []any{job.PayloadReference}); err != nil {
 			return false, err
-		}
-		var holds []string
-		for rows.Next() {
-			var hold string
-			if err := rows.Scan(&hold); err != nil {
-				rows.Close()
-				return false, err
-			}
-			holds = append(holds, hold)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return false, err
-		}
-		for _, hold := range holds {
-			if err := settleReservation(ctx, tx, hold,
-				w.settings.Billing.MinEmployerResumePoints,
-				"Employer resume charge (review required)"); err != nil {
-				return false, err
-			}
 		}
 		return true, tx.Commit(ctx)
 	}
@@ -285,6 +260,10 @@ func (w *Worker) queueEvaluations(ctx context.Context, job *ClaimedJob) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	active, err := lockLease(ctx, tx, job)
+	if err != nil || !active {
+		return err
+	}
 	rows, err := tx.Query(ctx,
 		`SELECT evaluation.id
 		 FROM evaluation
@@ -330,35 +309,15 @@ func (w *Worker) storeBlockEmbeddings(ctx context.Context, job *ClaimedJob) erro
 		return nil
 	}
 	model := w.settings.OpenRouter.EmbeddingModel
-	rows, err := w.pool.Query(ctx,
-		`SELECT block->>'id' AS block_id, block->>'text' AS block_text
-		 FROM resume_version, jsonb_array_elements(extraction_blocks->'blocks') AS block
-		 WHERE id = $1`, job.PayloadReference)
+	doc, _, err := w.loadParsedResume(ctx, job.PayloadReference)
 	if err != nil {
 		return err
 	}
 	textsByBlock := make(map[string]string)
 	hashesByBlock := make(map[string]string)
-	for rows.Next() {
-		var blockID string
-		var blockText *string
-		if err := rows.Scan(&blockID, &blockText); err != nil {
-			rows.Close()
-			return err
-		}
-		text := ""
-		if blockText != nil {
-			text = trimSpace(*blockText)
-		}
-		if text == "" {
-			continue
-		}
-		textsByBlock[blockID] = text
-		hashesByBlock[blockID] = semantic.TextHash(text)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
+	for _, block := range scoringBlocks(doc.Blocks) {
+		textsByBlock[block.ID] = block.Text
+		hashesByBlock[block.ID] = semantic.TextHash(block.Text)
 	}
 	if len(textsByBlock) == 0 {
 		return nil
@@ -401,21 +360,37 @@ func (w *Worker) storeBlockEmbeddings(ctx context.Context, job *ClaimedJob) erro
 			hashes = append(hashes, hash)
 			texts = append(texts, text)
 		}
-		vectors, err := w.models.EmbedTexts(model, texts)
+		vectors, usedModel, err := w.models.EmbedTextsWithModel(model, texts)
 		if err != nil {
-			if _, ok := err.(*openrouter.RetryableError); ok {
-				if rerr := w.requeueOrDegrade(job, "Block embedding", err); rerr != nil {
-					return rerr
+			return w.modelFailure(job, "Resume embedding", err)
+		}
+		if usedModel != model {
+			// Cached primary vectors cannot be mixed with a fallback model's space.
+			model = usedModel
+			hashes, texts = nil, nil
+			seen := make(map[string]bool)
+			for blockID, hash := range hashesByBlock {
+				if !seen[hash] {
+					seen[hash] = true
+					hashes = append(hashes, hash)
+					texts = append(texts, textsByBlock[blockID])
 				}
 			}
-			log.Printf("job %s: embedding failed; skipping semantic evidence: %v", job.ID, err)
-			return nil
+			vectors, err = w.models.EmbedTextsExact(model, texts)
+			if err != nil {
+				return w.modelFailure(job, "Resume embedding", err)
+			}
+			vectorsByHash = make(map[string][]float64)
 		}
 		tx, err := w.pool.Begin(ctx)
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback(ctx)
+		active, err := lockLease(ctx, tx, job)
+		if err != nil || !active {
+			return err
+		}
 		for i, hash := range hashes {
 			vectorsByHash[hash] = vectors[i]
 			if _, err := tx.Exec(ctx,
@@ -435,6 +410,13 @@ func (w *Worker) storeBlockEmbeddings(ctx context.Context, job *ClaimedJob) erro
 		return err
 	}
 	defer tx.Rollback(ctx)
+	active, err := lockLease(ctx, tx, job)
+	if err != nil || !active {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM resume_block_embedding WHERE resume_version_id = $1`, job.PayloadReference); err != nil {
+		return err
+	}
 	for blockID, hash := range hashesByBlock {
 		vector, ok := vectorsByHash[hash]
 		if !ok {

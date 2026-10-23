@@ -12,8 +12,8 @@ import (
 )
 
 // settlePointsFromUsage charges the greater of the minimum or the
-// ceiling-rounded reported cost, falling back to token counts at the price
-// ceilings when the provider reported no usable cost.
+// ceiling-rounded reported cost. Zero provider cost still incurs the minimum;
+// price ceilings bound the accepted quote rather than estimate settlement.
 func settlePointsFromUsage(promptTokens, completionTokens int, reportedCostUSD float64, kind string, settings config.BillingSettings) int {
 	billingSettings := billingSettingsFrom(settings)
 	return billing.SettleFromUsage(promptTokens, completionTokens, reportedCostUSD, kind, billingSettings)
