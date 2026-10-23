@@ -50,14 +50,6 @@ func WriteError(w http.ResponseWriter, status int, code, message string) {
 	_ = json.NewEncoder(w).Encode(Error{Code: code, Message: message})
 }
 
-// NotImplemented marks a route whose Go port has not landed yet.
-func NotImplemented(w http.ResponseWriter, message string) {
-	if message == "" {
-		message = "Go backend port in progress"
-	}
-	WriteError(w, http.StatusServiceUnavailable, CodeServiceUnavailable, message)
-}
-
 const (
 	maxBodyBytes          = 1 << 20
 	maxMultipartBodyBytes = 21 << 20
