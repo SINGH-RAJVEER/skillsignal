@@ -1,5 +1,7 @@
 import { Button } from "@skillsignal/ui/components/button";
+import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useDemoTour } from "../features/tour/DemoTour";
 
 const AUDIENCES = [
 	{
@@ -18,48 +20,76 @@ const AUDIENCES = [
 	},
 ];
 
-export const Landing = () => (
-	<main className="public-page">
-		<header className="public-header">
-			<div className="brand-mark">
-				<img src="/icon.webp" alt="SkillSignal" />
-			</div>
-			<nav>
-				<Link to="/sign-in">Sign in</Link>
-				<Button asChild size="sm">
-					<Link to="/sign-up?mode=candidate">Sign up</Link>
-				</Button>
-			</nav>
-		</header>
+export const Landing = () => {
+	const { beginDemo } = useDemoTour();
+	const [isStartingDemo, setIsStartingDemo] = useState(false);
+	const [demoError, setDemoError] = useState<string | null>(null);
+	const startDemo = async () => {
+		setIsStartingDemo(true);
+		setDemoError(null);
+		const result = await beginDemo();
+		setDemoError(result.error);
+		setIsStartingDemo(false);
+	};
 
-		<section className="public-hero">
-			<h1>Resume evaluation with evidence.</h1>
-			<p className="hero-copy">
-				Scores are only as good as their proof. Every evaluation quotes
-				the lines of the resume that earned it, against requirements you
-				confirmed.
-			</p>
-		</section>
-
-		<section className="landing-audiences">
-			{AUDIENCES.map((audience) => (
-				<article key={audience.name} className="landing-audience">
-					<p className="eyebrow">{audience.name}</p>
-					<h2>{audience.headline}</h2>
-					<p>{audience.copy}</p>
-					<Button asChild variant="outline" size="sm">
-						<Link to={audience.to}>{audience.cta}</Link>
+	return (
+		<main className="public-page">
+			<header className="public-header">
+				<div className="brand-mark">
+					<img src="/icon.webp" alt="SkillSignal" />
+				</div>
+				<nav>
+					<Link to="/sign-in">Sign in</Link>
+					<Button asChild size="sm">
+						<Link to="/sign-up?mode=candidate">Sign up</Link>
 					</Button>
-				</article>
-			))}
-		</section>
+				</nav>
+			</header>
 
-		<footer className="public-footer">
-			<span>
-				Evaluations compare one resume submission with one confirmed job
-				version.
-			</span>
-			<Link to="/sign-in">Sign in</Link>
-		</footer>
-	</main>
-);
+			<section className="public-hero">
+				<h1>Resume evaluation with evidence.</h1>
+				<p className="hero-copy">
+					Scores are only as good as their proof. Every evaluation
+					quotes the lines of the resume that earned it, against
+					requirements you confirmed.
+				</p>
+				<div className="public-hero-actions" data-tour="landing-demo">
+					<Button
+						disabled={isStartingDemo}
+						onClick={() => void startDemo()}
+					>
+						{isStartingDemo
+							? "Preparing demo…"
+							: "See how it works"}
+					</Button>
+					{demoError && (
+						<p className="form-error" role="alert">
+							{demoError}
+						</p>
+					)}
+				</div>
+			</section>
+
+			<section className="landing-audiences">
+				{AUDIENCES.map((audience) => (
+					<article key={audience.name} className="landing-audience">
+						<p className="eyebrow">{audience.name}</p>
+						<h2>{audience.headline}</h2>
+						<p>{audience.copy}</p>
+						<Button asChild variant="outline" size="sm">
+							<Link to={audience.to}>{audience.cta}</Link>
+						</Button>
+					</article>
+				))}
+			</section>
+
+			<footer className="public-footer">
+				<span>
+					Evaluations compare one resume submission with one confirmed
+					job version.
+				</span>
+				<Link to="/sign-in">Sign in</Link>
+			</footer>
+		</main>
+	);
+};

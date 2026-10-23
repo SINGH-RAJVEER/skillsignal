@@ -74,7 +74,7 @@ export const ExportDialog = ({
 				onDismiss,
 			})}
 		>
-			<div className="modal-panel">
+			<div className="modal-panel" data-tour="employer-export">
 				<h3 id="export-title">Export CSV</h3>
 				<p className="muted-copy">
 					Choose, reorder, and rename the exported columns.

@@ -19,6 +19,7 @@ import {
 import { useSearchParams } from "react-router-dom";
 import { ThinkingOrb } from "thinking-orbs";
 import { authClient } from "../../lib/auth-client";
+import { useDemoTourAction } from "../tour/DemoTour";
 import {
 	type Evaluation,
 	type EvaluationFilters,
@@ -292,6 +293,24 @@ export const Workspace = () => {
 		return () => window.removeEventListener("keydown", onKeyDown);
 	}, [overlayOpen, closeOverlays]);
 
+	const showDemoResults = useCallback(() => setActiveTab("results"), []);
+	const showDemoEvidence = useCallback(() => {
+		setActiveTab("results");
+		const example =
+			evaluations.find(
+				(evaluation) => evaluation.eligibility === "eligible",
+			) ?? evaluations[0];
+		if (example) setInspectingEvaluation(example);
+	}, [evaluations]);
+	const showDemoExport = useCallback(() => {
+		setInspectingEvaluation(null);
+		setActiveTab("results");
+		setIsExportOpen(true);
+	}, []);
+	useDemoTourAction("employer-results", showDemoResults);
+	useDemoTourAction("employer-evidence", showDemoEvidence);
+	useDemoTourAction("employer-export", showDemoExport);
+
 	if (isPending) {
 		return (
 			<main className="workspace-page">
@@ -448,10 +467,9 @@ export const Workspace = () => {
 		if (organizationId) setIsCreateJobOpen(true);
 		else setIsCreateOrgOpen(true);
 	};
-
 	return (
 		<div className="workspace-page">
-			<header className="workspace-header">
+			<header className="workspace-header" data-tour="employer-header">
 				<div className="workspace-header-left">
 					<a href="/" className="brand-mark">
 						<img src="/icon.webp" alt="SkillSignal" />
@@ -511,7 +529,7 @@ export const Workspace = () => {
 			)}
 
 			<div className="workspace-layout">
-				<aside className="workspace-aside">
+				<aside className="workspace-aside" data-tour="employer-role">
 					<div className="workspace-aside-head">
 						<h2>Roles</h2>
 						<Button onClick={startCreateJob} size="sm">
@@ -563,7 +581,7 @@ export const Workspace = () => {
 				<main className="workspace-main">
 					{selectedJob ? (
 						<div className="workspace-stage">
-							<div className="job-head">
+							<div className="job-head" data-tour="employer-job">
 								<div>
 									<div className="job-title-row">
 										<h1>{selectedJob.title}</h1>

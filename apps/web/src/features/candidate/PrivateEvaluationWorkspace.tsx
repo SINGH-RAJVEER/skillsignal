@@ -5,6 +5,7 @@ import { Textarea } from "@skillsignal/ui/components/textarea";
 import { AlertTriangle, FileDown, FileSearch, Trash2 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { ThinkingOrb } from "thinking-orbs";
+import { useDemoTourAction } from "../tour/DemoTour";
 import { BillingStrip, PackPurchase, usePointsSummary } from "./BillingPanel";
 import {
 	candidateClient,
@@ -145,7 +146,7 @@ export const PrivateEvaluationWorkspace = () => {
 		}
 	};
 
-	const openPrivateEvaluation = async (evaluationId: string) => {
+	const openPrivateEvaluation = useCallback(async (evaluationId: string) => {
 		setError(null);
 		try {
 			setPrivateEvaluation(
@@ -158,7 +159,26 @@ export const PrivateEvaluationWorkspace = () => {
 					: "Report could not be opened",
 			);
 		}
-	};
+	}, []);
+	const showSeededReport = useCallback(async () => {
+		try {
+			const history = await candidateClient.independentEvaluations();
+			setPrivateHistory(history);
+			const evaluation =
+				history.find((item) => item.status === "complete") ??
+				history[0];
+			if (evaluation) setPrivateEvaluation(evaluation);
+		} catch (reason) {
+			setError(
+				reason instanceof Error
+					? reason.message
+					: "The seeded private report could not be loaded.",
+			);
+		}
+	}, []);
+	const showHistory = useCallback(() => setPrivateEvaluation(null), []);
+	useDemoTourAction("candidate-report", showSeededReport);
+	useDemoTourAction("candidate-history", showHistory);
 
 	const deleteEvaluation = async (evaluationId: string) => {
 		setDeletingId(evaluationId);
@@ -246,7 +266,7 @@ export const PrivateEvaluationWorkspace = () => {
 							<div className="candidate-file-alternative">
 								<span>or upload it</span>
 								<Input
-									accept=".pdf,.docx,.txt"
+									accept=".pdf,.docx,.txt,.md,.markdown,.html,.htm"
 									id="job-description-file"
 									key={`job-${fileInputKey}`}
 									onChange={(event) => {
@@ -259,6 +279,10 @@ export const PrivateEvaluationWorkspace = () => {
 									type="file"
 								/>
 							</div>
+							<p className="form-hint">
+								PDF, DOCX, TXT, Markdown, or HTML. Maximum 10
+								MB.
+							</p>
 						</div>
 						<Button
 							disabled={!privateResume || isWorking}
@@ -310,6 +334,7 @@ export const PrivateEvaluationWorkspace = () => {
 			<aside
 				className="candidate-history"
 				aria-labelledby="history-title"
+				data-tour="candidate-history"
 			>
 				<header>
 					<p className="eyebrow">Private archive</p>
@@ -523,7 +548,10 @@ const PrivateReport = ({
 	const warnings = facts.warnings ?? [];
 
 	return (
-		<article className="private-report report-preview">
+		<article
+			className="private-report report-preview"
+			data-tour="candidate-report"
+		>
 			<header>
 				<div>
 					<span>{evaluation.originalName}</span>

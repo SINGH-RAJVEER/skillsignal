@@ -32,6 +32,8 @@ export const candidateClient = {
 			"Corrected resume is not available",
 		),
 	independentEvaluations: () => independentEvaluations(),
+	submissionReceipts: () =>
+		request<SubmissionReceipt[]>("/api/submissions/receipts"),
 	deleteIndependentEvaluation: (evaluationId: string) =>
 		request<void>(`/api/independent-evaluations/${evaluationId}`, {
 			method: "DELETE",
@@ -82,6 +84,13 @@ export const candidateClient = {
 			receivedAt: string;
 		}>(`/api/jobs/${jobId}/resumes`, { method: "POST", body });
 	},
+};
+
+export type SubmissionReceipt = {
+	submissionId: string;
+	jobId: string;
+	jobTitle: string;
+	receivedAt: string;
 };
 
 export type PointQuote = {

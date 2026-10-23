@@ -60,7 +60,7 @@ export const ResultsTab = ({
 	)?.score;
 
 	return (
-		<div className="workspace-stage-gap">
+		<div className="workspace-stage-gap" data-tour="employer-results">
 			<div className="stat-strip">
 				<div className="stat">
 					<span>Evaluated</span>
@@ -80,7 +80,7 @@ export const ResultsTab = ({
 				</div>
 			</div>
 
-			<div className="filter-bar">
+			<div className="filter-bar" data-tour="employer-filters">
 				<div className="filter-group">
 					<Input
 						aria-label="Search candidates"
