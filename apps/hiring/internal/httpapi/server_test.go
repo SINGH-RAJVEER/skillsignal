@@ -73,11 +73,13 @@ func TestHiringContractsAndSingleUseInvitation(t *testing.T) {
 	var documentMu sync.Mutex
 	documentResults := make(map[string]map[string]string)
 	var documentCreates atomic.Int32
+	var documentRequests atomic.Int32
 	documents := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			w.WriteHeader(204)
 			return
 		}
+		documentRequests.Add(1)
 		var input struct {
 			OrganizationID string `json:"organizationId"`
 			OriginalName   string `json:"originalName"`
@@ -95,7 +97,8 @@ func TestHiringContractsAndSingleUseInvitation(t *testing.T) {
 			json.NewEncoder(w).Encode(previous)
 			return
 		}
-		doc, version := ids.New(), ids.New()
+		suffix := digest(input.IdempotencyKey)
+		doc, version := "upload-"+suffix, "version-"+suffix
 		_, err := pool.Exec(ctx, `INSERT INTO documents.resume_document(id,organization_id,storage_key,checksum,media_type,size_bytes,original_name,retention_date) VALUES($1,$2,$1,'test',$3,$4,$5,now()+interval '90 days')`, doc, input.OrganizationID, input.MediaType, len(input.Content), input.OriginalName)
 		if err == nil {
 			_, err = pool.Exec(ctx, `INSERT INTO documents.resume_version(id,organization_id,resume_document_id,version) VALUES($1,$2,$3,1)`, version, input.OrganizationID, doc)
@@ -113,6 +116,8 @@ func TestHiringContractsAndSingleUseInvitation(t *testing.T) {
 	defer documents.Close()
 	t.Setenv("DOCUMENTS_URL", documents.URL)
 	var enterprise, failReserve atomic.Bool
+	var insufficientPoints atomic.Bool
+	var reserveCalls atomic.Int32
 	var activations, releases atomic.Int32
 	billing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/activate") {
@@ -123,6 +128,12 @@ func TestHiringContractsAndSingleUseInvitation(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, "/release") {
 			releases.Add(1)
 			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			return
+		}
+		reserveCalls.Add(1)
+		if insufficientPoints.Swap(false) {
+			w.WriteHeader(402)
+			json.NewEncoder(w).Encode(map[string]string{"code": "INSUFFICIENT_POINTS", "message": "Insufficient organization points"})
 			return
 		}
 		if failReserve.Swap(false) {
@@ -362,5 +373,46 @@ func TestHiringContractsAndSingleUseInvitation(t *testing.T) {
 	r = request("POST", "/api/jobs/"+job+"/resume-batches/files", employer, body, ct)
 	if r.Code != 410 {
 		t.Fatalf("late attachment after expiry: %d %s", r.Code, r.Body.String())
+	}
+	for _, failureStatus := range []int{503, 402} {
+		idempotencyKey = fmt.Sprintf("expired-document-after-billing-%d", failureStatus)
+		if failureStatus == 503 {
+			failReserve.Store(true)
+		} else {
+			insufficientPoints.Store(true)
+		}
+		r = request("POST", "/api/jobs/"+job+"/resume-batches/files", employer, body, ct)
+		expectedStatus := failureStatus
+		if failureStatus == 402 {
+			expectedStatus = 202
+		}
+		if r.Code != expectedStatus {
+			t.Fatalf("billing %d setup: %d %s", failureStatus, r.Code, r.Body.String())
+		}
+		batchID := "batch-" + digest(org+"\x00"+job+"\x00"+employer+"\x00"+idempotencyKey)
+		var pendingDocument, pendingVersion, pendingSubmission string
+		if err := pool.QueryRow(ctx, `SELECT document_id,resume_version_id,submission_id FROM submission_intake WHERE operation_key=$1 AND state='pending'`, batchID+":0").Scan(&pendingDocument, &pendingVersion, &pendingSubmission); err != nil {
+			t.Fatal(err)
+		}
+		suffix := digest("submission-document:" + pendingSubmission)
+		if pendingDocument != "upload-"+suffix || pendingVersion != "version-"+suffix {
+			t.Fatalf("pending intake lost deterministic document references: %s %s", pendingDocument, pendingVersion)
+		}
+		purgeBody, _ = json.Marshal(map[string]any{"documentIds": []string{pendingDocument}, "versionIds": []string{pendingVersion}})
+		purge = httptest.NewRequest("POST", "/internal/hiring/prepare-purge-documents", bytes.NewReader(purgeBody))
+		purge.Header.Set("X-Internal-Secret", secret)
+		response = httptest.NewRecorder()
+		mux.ServeHTTP(response, purge)
+		if response.Code != 200 {
+			t.Fatalf("pending intake expiry: %d %s", response.Code, response.Body.String())
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM documents.resume_document WHERE id=$1`, pendingDocument); err != nil {
+			t.Fatal(err)
+		}
+		beforeDocuments, beforeReserves := documentRequests.Load(), reserveCalls.Load()
+		r = request("POST", "/api/jobs/"+job+"/resume-batches/files", employer, body, ct)
+		if r.Code != 410 || documentRequests.Load() != beforeDocuments || reserveCalls.Load() != beforeReserves {
+			t.Fatalf("expired billing-%d intake recreated source or hold: %d %s", failureStatus, r.Code, r.Body.String())
+		}
 	}
 }

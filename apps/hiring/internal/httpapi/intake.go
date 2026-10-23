@@ -62,7 +62,8 @@ func (s *Server) acceptEntries(r *http.Request, org, jobID string, entries []doc
 		op := batchID + fmt.Sprintf(":%d", index)
 		hash := requestHash
 		submissionID, candidateID := "submission-"+digest(op), "candidate-"+digest(op)
-		_, err := s.pool.Exec(r.Context(), `INSERT INTO submission_intake(operation_key,organization_id,job_id,job_version_id,request_hash,submission_id,candidate_record_id,batch_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(operation_key) DO NOTHING`, op, org, jobID, jobVersionID, hash, submissionID, candidateID, batchID)
+		documentSuffix := digest("submission-document:" + submissionID)
+		_, err := s.pool.Exec(r.Context(), `INSERT INTO submission_intake(operation_key,organization_id,job_id,job_version_id,request_hash,submission_id,candidate_record_id,batch_id,document_id,resume_version_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(operation_key) DO NOTHING`, op, org, jobID, jobVersionID, hash, submissionID, candidateID, batchID, "upload-"+documentSuffix, "version-"+documentSuffix)
 		if err != nil {
 			return nil, err
 		}
@@ -121,7 +122,7 @@ func (s *Server) acceptEntry(r *http.Request, op, requestHash string, entry docu
 	if err := s.client.Call(r.Context(), "documents", "/internal/documents", map[string]any{"organizationId": org, "originalName": entry.Name, "mediaType": documents.MediaTypeForName(entry.Name), "content": entry.Content, "retentionDays": retentionDays, "idempotencyKey": "submission-document:" + submissionID}, &doc); err != nil {
 		return nil, err
 	}
-	if doc.DocumentID == "" || doc.VersionID == "" {
+	if documentID == nil || versionID == nil || doc.DocumentID != *documentID || doc.VersionID != *versionID {
 		return nil, &domainhttp.Error{Status: 503, Code: "SERVICE_UNAVAILABLE", Message: "Document service returned an invalid version"}
 	}
 	var reservation struct {
