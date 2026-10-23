@@ -82,6 +82,11 @@ in
 		STORAGE_ROOT = "${config.devenv.root}/.local-storage";
 		WEB_URL = "http://localhost:${webPort}";
 		VITE_API_URL = "http://localhost:${apiPort}";
+		IDENTITY_URL = "http://127.0.0.1:${servicePorts.identity}";
+		HIRING_URL = "http://127.0.0.1:${servicePorts.hiring}";
+		DOCUMENTS_URL = "http://127.0.0.1:${servicePorts.documents}";
+		EVALUATION_URL = "http://127.0.0.1:${servicePorts.evaluation}";
+		BILLING_URL = "http://127.0.0.1:${servicePorts.billing}";
 		# Nothing in the Go tree needs cgo, and NixOS has no default gcc on PATH.
 		CGO_ENABLED = "0";
 	};

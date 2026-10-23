@@ -2,8 +2,17 @@ x-domain-service: &domain-service
   depends_on:
     migrate:
       condition: service_completed_successfully
-  environment:
+  environment: &domain-environment
     DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/skillsignal
+    JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+    STORAGE_ROOT: /var/lib/skillsignal
+    ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    POINTS_PER_USD: ${POINTS_PER_USD:-1000}
+    MIN_POINTS_INDEPENDENT_EVALUATION: ${MIN_POINTS_INDEPENDENT_EVALUATION:-10}
+    MIN_POINTS_EMPLOYER_RESUME: ${MIN_POINTS_EMPLOYER_RESUME:-5}
+    PRICE_CEILING_INPUT_USD_PER_MILLION: ${PRICE_CEILING_INPUT_USD_PER_MILLION:-3.0}
+    PRICE_CEILING_OUTPUT_USD_PER_MILLION: ${PRICE_CEILING_OUTPUT_USD_PER_MILLION:-15.0}
+    INDEPENDENT_RETENTION_DAYS: ${INDEPENDENT_RETENTION_DAYS:-30}
     PORT: "8080"
   read_only: true
   tmpfs:
@@ -46,34 +55,46 @@ services:
       context: .
       dockerfile: apps/identity/Dockerfile
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/skillsignal
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      <<: *domain-environment
       JWT_TTL: ${JWT_TTL:-168h}
-      PORT: "8080"
+      RETENTION_SWEEP_INTERVAL_SECONDS: ${RETENTION_SWEEP_INTERVAL_SECONDS:-3600}
 
   hiring:
     <<: *domain-service
     build:
       context: .
       dockerfile: apps/hiring/Dockerfile
+    volumes:
+      - resume_storage:/var/lib/skillsignal:Z
 
   documents:
     <<: *domain-service
     build:
       context: .
       dockerfile: apps/documents/Dockerfile
+    volumes:
+      - resume_storage:/var/lib/skillsignal:Z
 
   evaluation:
     <<: *domain-service
     build:
       context: .
       dockerfile: apps/evaluation/Dockerfile
+    volumes:
+      - resume_storage:/var/lib/skillsignal:Z
 
   billing:
     <<: *domain-service
     build:
       context: .
       dockerfile: apps/billing/Dockerfile
+    environment:
+      <<: *domain-environment
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+      RAZORPAY_PACKS: ${RAZORPAY_PACKS:-}
+      ENTERPRISE_SALES_EMAIL: ${ENTERPRISE_SALES_EMAIL:-sales@skillsignal.app}
 
   gateway:
     build:
@@ -133,11 +154,18 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/skillsignal
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-      STORAGE_ROOT: /var/lib/skillsignal
+      <<: *domain-environment
       WORKER_ROLE: inference
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_EXTRACTION_MODEL: ${OPENROUTER_EXTRACTION_MODEL:-nvidia/nemotron-3-super-120b-a12b:free}
+      OPENROUTER_ASSESSMENT_MODEL: ${OPENROUTER_ASSESSMENT_MODEL:-nvidia/nemotron-3-super-120b-a12b:free}
+      OPENROUTER_EMBEDDING_MODEL: ${OPENROUTER_EMBEDDING_MODEL:-nvidia/nemotron-3-embed-1b:free}
+      OPENROUTER_EXTRACTION_FALLBACKS: ${OPENROUTER_EXTRACTION_FALLBACKS-liquid/lfm-2.5-2.6b:free}
+      OPENROUTER_ASSESSMENT_FALLBACKS: ${OPENROUTER_ASSESSMENT_FALLBACKS-liquid/lfm-2.5-2.6b:free}
+      OPENROUTER_EMBEDDING_FALLBACKS: ${OPENROUTER_EMBEDDING_FALLBACKS-liquid/lfm-2.5-embedding-350m:free}
+      OPENROUTER_TIMEOUT_SECONDS: ${OPENROUTER_TIMEOUT_SECONDS:-90}
+      OPENROUTER_MAX_OUTPUT_TOKENS: ${OPENROUTER_MAX_OUTPUT_TOKENS:-4096}
     volumes:
       - resume_storage:/var/lib/skillsignal:Z
     read_only: true
