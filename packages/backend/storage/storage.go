@@ -1,5 +1,5 @@
 // Package storage keeps uploaded originals outside the web root under
-// generated keys, with a traversal guard on every access.
+// generated keys, on local disk or behind the edge object gateway.
 package storage
 
 import (
@@ -12,20 +12,36 @@ import (
 // ErrEscape marks a key that resolves outside the storage root.
 var ErrEscape = errors.New("storage key escapes the configured root")
 
-// Store is a local object store rooted at one directory.
-type Store struct{ root string }
+// Store persists objects by key. Get reports absent keys with fs.ErrNotExist,
+// and Delete ignores them.
+type Store interface {
+	Put(key string, content []byte) error
+	Get(key string) ([]byte, error)
+	Delete(key string) error
+}
+
+// Open selects the remote gateway when a URL is configured and local disk otherwise.
+func Open(root, remoteURL, remoteToken string) (Store, error) {
+	if remoteURL != "" {
+		return NewRemote(remoteURL, remoteToken)
+	}
+	return New(root)
+}
+
+// Local is an object store rooted at one directory.
+type Local struct{ root string }
 
 // New resolves the root once so later joins cannot escape it.
-func New(root string) (*Store, error) {
+func New(root string) (*Local, error) {
 	absolute, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{root: absolute}, nil
+	return &Local{root: absolute}, nil
 }
 
 // Put writes content, creating parent directories as needed.
-func (s *Store) Put(key string, content []byte) error {
+func (s *Local) Put(key string, content []byte) error {
 	path, err := s.resolve(key)
 	if err != nil {
 		return err
@@ -37,7 +53,7 @@ func (s *Store) Put(key string, content []byte) error {
 }
 
 // Get reads a stored object.
-func (s *Store) Get(key string) ([]byte, error) {
+func (s *Local) Get(key string) ([]byte, error) {
 	path, err := s.resolve(key)
 	if err != nil {
 		return nil, err
@@ -46,7 +62,7 @@ func (s *Store) Get(key string) ([]byte, error) {
 }
 
 // Delete removes a stored object, ignoring absent keys.
-func (s *Store) Delete(key string) error {
+func (s *Local) Delete(key string) error {
 	path, err := s.resolve(key)
 	if err != nil {
 		return err
@@ -57,7 +73,7 @@ func (s *Store) Delete(key string) error {
 	return nil
 }
 
-func (s *Store) resolve(key string) (string, error) {
+func (s *Local) resolve(key string) (string, error) {
 	clean := filepath.Clean(string(filepath.Separator) + key)
 	path := filepath.Join(s.root, clean)
 	// Like the Python guard, the root itself is not a valid object path.

@@ -31,7 +31,7 @@ func main() {
 		log.Fatalf("connect to database: %v", err)
 	}
 	defer pool.Close()
-	store, err := storage.New(settings.StorageRoot)
+	store, err := storage.Open(settings.StorageRoot, settings.ObjectStorageURL, settings.ObjectStorageToken)
 	if err != nil {
 		log.Fatalf("configure storage: %v", err)
 	}

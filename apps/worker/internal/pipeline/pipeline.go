@@ -58,13 +58,13 @@ type Worker struct {
 	pool     *pgxpool.Pool
 	settings config.Settings
 	models   *openrouter.Client
-	store    *storage.Store
+	store    storage.Store
 	role     jobs.Role
 	jobTypes []string
 }
 
 // New builds a worker restricted to the durable job types owned by role.
-func New(pool *pgxpool.Pool, settings config.Settings, store *storage.Store, role jobs.Role) *Worker {
+func New(pool *pgxpool.Pool, settings config.Settings, store storage.Store, role jobs.Role) *Worker {
 	var models *openrouter.Client
 	if role == jobs.InferenceRole {
 		models = openrouter.New(

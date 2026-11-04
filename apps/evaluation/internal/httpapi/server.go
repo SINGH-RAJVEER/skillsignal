@@ -30,11 +30,11 @@ type Server struct {
 	pool     *pgxpool.Pool
 	client   *domainhttp.Client
 	settings config.Settings
-	store    *storage.Store
+	store    storage.Store
 }
 
 func Register(mux *http.ServeMux, pool *pgxpool.Pool, settings config.Settings) {
-	store, err := storage.New(settings.StorageRoot)
+	store, err := storage.Open(settings.StorageRoot, settings.ObjectStorageURL, settings.ObjectStorageToken)
 	if err != nil {
 		panic(err)
 	}

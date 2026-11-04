@@ -49,6 +49,8 @@ type Settings struct {
 	JWTSecret                     string
 	JWTTTL                        time.Duration
 	StorageRoot                   string
+	ObjectStorageURL              string
+	ObjectStorageToken            string
 	IndependentRetentionDays      int
 	RetentionSweepIntervalSeconds int
 	Billing                       BillingSettings
@@ -153,6 +155,8 @@ func Load() (Settings, error) {
 		return Settings{}, fmt.Errorf("JWT_TTL %w", err)
 	}
 	settings.StorageRoot = envOr("STORAGE_ROOT", ".local-storage")
+	settings.ObjectStorageURL = os.Getenv("OBJECT_STORAGE_URL")
+	settings.ObjectStorageToken = os.Getenv("OBJECT_STORAGE_TOKEN")
 	settings.IndependentRetentionDays, err = intOr("INDEPENDENT_RETENTION_DAYS", "30")
 	if err != nil {
 		return Settings{}, err
