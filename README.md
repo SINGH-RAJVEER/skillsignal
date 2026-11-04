@@ -32,6 +32,8 @@ apps/
 	billing/    Point accounts, ledger, reservations, weekly allowance, Razorpay, and entitlements.
 	worker/     Parser and inference processes selected by WORKER_ROLE.
 	migrate/    One-shot PostgreSQL migrations.
+	edge/       Cloudflare Worker, Container controllers, static assets, and R2 object gateway.
+	supervisor/ Runs the gateway and domain services inside one Container.
 packages/
 	contracts/  Shared route, event, and durable-job contracts.
 	backend/    Shared Go libraries.
@@ -42,7 +44,7 @@ The gateway is the public backend entry point. Domain processes own authoritativ
 
 PostgreSQL stores the durable queue. Parser and inference processes claim disjoint job types with `FOR UPDATE SKIP LOCKED`, commit a lease before slow work, renew it during processing, and fence result writes and point settlement against lease replacement. Hiring commits evaluation requests to an outbox with each accepted submission and retries delivery independently of the upload request.
 
-Parser workers have no model credential and read source storage. Inference workers extract facts, embed redacted evidence, assess criteria, calculate scores, render corrected resumes, and settle holds. Local deployments use a shared private volume. Production still needs a private object-storage adapter and deployment-specific isolation. Cloud Run deployment must use continuously running parser and inference worker pools; a service that scales to zero does not consume this polling queue.
+Parser workers have no model credential and read source storage. Inference workers extract facts, embed redacted evidence, assess criteria, calculate scores, render corrected resumes, and settle holds. Local deployments use a shared private volume. Production uses private R2 through the edge object gateway; parser workers hold a read-only credential. Workers must run continuously; a process that scales to zero does not consume this polling queue.
 
 ## Run locally
 
@@ -77,6 +79,16 @@ docker compose up --build
 ```
 
 Compose applies migrations before starting the services. The parser mounts source storage read-only; inference mounts it read-write for corrected-resume artifacts. The development volume is not a production object store.
+
+## Deploy to Cloudflare
+
+One `skillsignal` Worker serves the web client as static assets, routes `/api/*`, `/healthz`, and `/readyz` to a backend Container, and keeps separate parser and inference Containers running on a one-minute schedule. The backend Container runs the gateway and five domain services on loopback because Containers have no private network between them. The account needs Workers Paid, Containers, Durable Objects, and R2.
+
+Pull requests into protected `main` must pass `test-and-build` and `infrastructure`. Each push to `main` runs a `migrate` job, then a `deploy` job that starts only after every migration has committed. A failed migration leaves the running version in place; earlier migrations in that run stay applied, so keep them backward-compatible with the running release. The job then builds and deploys the Worker and image, and waits for `/readyz`.
+
+The `cloudflare-production` GitHub environment holds `CLOUDFLARE_API_TOKEN`, `DATABASE_URL`, `JWT_SECRET`, `OBJECT_STORAGE_TOKEN`, `OBJECT_STORAGE_READ_TOKEN`, and optional `OPENROUTER_API_KEY`, `RAZORPAY_*`, and `ADMIN_TOKEN` secrets, with `CLOUDFLARE_ACCOUNT_ID` and `PUBLIC_URL` variables. `DATABASE_URL` must be a direct PostgreSQL 18 connection with TLS. To use a custom domain, change `WEB_URL` and add a route in `apps/edge/wrangler.jsonc`, then update `PUBLIC_URL`.
+
+The inference Container does not start without `OPENROUTER_API_KEY`, so submitted resumes stay queued until it is set. Cloudflare limits request bodies by plan, to 100 MB on Free and Pro, which is below the application's 502 MiB batch upload limit.
 
 ## Checks
 
