@@ -34,12 +34,12 @@
 				},
 				{
 					"name": "Vet Go modules",
-					"run": "go vet ./packages/... ./apps/migrate/... ./apps/gateway/... ./apps/worker/... ./apps/identity/... ./apps/hiring/... ./apps/documents/... ./apps/evaluation/... ./apps/billing/... ./apps/supervisor/..."
+					"run": "go vet ./packages/backend/... ./packages/contracts/... ./apps/migrate/... ./apps/gateway/... ./apps/worker/... ./apps/identity/... ./apps/hiring/... ./apps/documents/... ./apps/evaluation/... ./apps/billing/... ./apps/supervisor/..."
 				},
 				{
 					"name": "Test Go modules",
 					"env": { "TEST_DATABASE_URL": "postgresql://postgres:password@127.0.0.1:5432/skillsignal" },
-					"run": "go test -p 1 ./packages/... ./apps/migrate/... ./apps/gateway/... ./apps/worker/... ./apps/identity/... ./apps/hiring/... ./apps/documents/... ./apps/evaluation/... ./apps/billing/... ./apps/supervisor/..."
+					"run": "go test -p 1 ./packages/backend/... ./packages/contracts/... ./apps/migrate/... ./apps/gateway/... ./apps/worker/... ./apps/identity/... ./apps/hiring/... ./apps/documents/... ./apps/evaluation/... ./apps/billing/... ./apps/supervisor/..."
 				}
 			]
 		},
