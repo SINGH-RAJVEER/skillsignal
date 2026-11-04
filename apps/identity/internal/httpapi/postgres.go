@@ -26,6 +26,12 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 }
 
 func (s *PostgresStore) RegisterCandidate(ctx context.Context, name, email, passwordHash string) (User, error) {
+	return s.register(ctx, name, email, passwordHash, "candidate")
+}
+func (s *PostgresStore) RegisterEmployer(ctx context.Context, name, email, passwordHash string) (User, error) {
+	return s.register(ctx, name, email, passwordHash, "employer")
+}
+func (s *PostgresStore) register(ctx context.Context, name, email, passwordHash, accountType string) (User, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return User{}, err
@@ -37,14 +43,14 @@ func (s *PostgresStore) RegisterCandidate(ctx context.Context, name, email, pass
 		ID:          ids.New(),
 		Name:        name,
 		Email:       email,
-		AccountType: "candidate",
+		AccountType: accountType,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
 	_, err = tx.Exec(ctx,
 		`INSERT INTO "user" (id, name, email, account_type, email_verified, created_at, updated_at)
-		 VALUES ($1, $2, $3, 'candidate', false, $4, $4)`,
-		user.ID, user.Name, user.Email, now,
+		 VALUES ($1, $2, $3, $5, false, $4, $4)`,
+		user.ID, user.Name, user.Email, now, accountType,
 	)
 	if err != nil {
 		return User{}, registrationError(err)
@@ -57,6 +63,16 @@ func (s *PostgresStore) RegisterCandidate(ctx context.Context, name, email, pass
 	if err != nil {
 		return User{}, registrationError(err)
 	}
+	if accountType == "employer" {
+		_, err = tx.Exec(ctx, `INSERT INTO organization_member (id, organization_id, user_id, role)
+		 SELECT $1, o.id, $2, o.default_member_role FROM organization o
+		 WHERE EXISTS (SELECT 1 FROM organization_email_domain d WHERE d.organization_id=o.id AND d.domain=split_part($3,'@',2))
+		 OR EXISTS (SELECT 1 FROM organization_allowed_email e WHERE e.organization_id=o.id AND e.email=$3)
+		 ORDER BY o.created_at,o.id LIMIT 1`, ids.New(), user.ID, email)
+		if err != nil {
+			return User{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return User{}, err
 	}
@@ -67,7 +83,7 @@ func (s *PostgresStore) Credentials(ctx context.Context, email string) (User, st
 	var user User
 	var passwordHash string
 	err := s.pool.QueryRow(ctx,
-		`SELECT u.id, u.name, u.email, u.account_type, u.email_verified, u.image,
+		`SELECT u.id, u.name, u.email, u.account_type, u.email_verified, u.image, u.is_demo,
 		        u.created_at, u.updated_at, a.password
 		 FROM "user" u
 		 JOIN account a ON a.user_id = u.id AND a.provider_id = 'credential'
@@ -75,7 +91,7 @@ func (s *PostgresStore) Credentials(ctx context.Context, email string) (User, st
 		email,
 	).Scan(
 		&user.ID, &user.Name, &user.Email, &user.AccountType, &user.EmailVerified,
-		&user.Image, &user.CreatedAt, &user.UpdatedAt, &passwordHash,
+		&user.Image, &user.IsDemo, &user.CreatedAt, &user.UpdatedAt, &passwordHash,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, "", ErrNotFound
@@ -86,12 +102,12 @@ func (s *PostgresStore) Credentials(ctx context.Context, email string) (User, st
 func (s *PostgresStore) User(ctx context.Context, userID string) (User, error) {
 	var user User
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, name, email, account_type, email_verified, image, created_at, updated_at
+		`SELECT id, name, email, account_type, email_verified, image, is_demo, created_at, updated_at
 		 FROM "user" WHERE id = $1`,
 		userID,
 	).Scan(
 		&user.ID, &user.Name, &user.Email, &user.AccountType, &user.EmailVerified,
-		&user.Image, &user.CreatedAt, &user.UpdatedAt,
+		&user.Image, &user.IsDemo, &user.CreatedAt, &user.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound

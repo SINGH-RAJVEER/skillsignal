@@ -48,6 +48,9 @@ func Grant(ctx context.Context, tx Tx, accountID string, amount int, reason, ide
 	if err == nil {
 		return Balance(ctx, tx, accountID)
 	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return 0, err
+	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO point_ledger_entry (id, account_id, amount, reason, idempotency_key)
 		 VALUES ($1, $2, $3, $4, $5)`,
@@ -62,6 +65,9 @@ func Reserve(ctx context.Context, tx Tx, accountID string, amount int, purpose, 
 	if amount <= 0 {
 		return Reservation{}, errors.New("reservation amounts must be positive")
 	}
+	if _, err := tx.Exec(ctx, `SELECT id FROM point_account WHERE id = $1 FOR UPDATE`, accountID); err != nil {
+		return Reservation{}, err
+	}
 	var existing Reservation
 	err := tx.QueryRow(ctx,
 		`SELECT id, account_id, amount, state FROM point_reservation
@@ -70,7 +76,7 @@ func Reserve(ctx context.Context, tx Tx, accountID string, amount int, purpose, 
 	if err == nil {
 		return existing, nil
 	}
-	if _, err := tx.Exec(ctx, `SELECT id FROM point_account WHERE id = $1 FOR UPDATE`, accountID); err != nil {
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return Reservation{}, err
 	}
 	available, err := Available(ctx, tx, accountID)
@@ -94,13 +100,19 @@ func Reserve(ctx context.Context, tx Tx, accountID string, amount int, purpose, 
 // Settle charges at most the reserved amount and closes the hold.
 // A hold that is no longer open is left untouched.
 func Settle(ctx context.Context, tx Tx, reservationID string, chargedAmount int, reason string) error {
+	if chargedAmount < 0 {
+		return errors.New("settlement amounts must not be negative")
+	}
 	var accountID string
 	var amount int
 	err := tx.QueryRow(ctx,
 		`SELECT account_id, amount FROM point_reservation WHERE id = $1 AND state = 'reserved' FOR UPDATE`,
 		reservationID).Scan(&accountID, &amount)
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
+	}
+	if err != nil {
+		return err
 	}
 	charge := chargedAmount
 	if charge > amount {
@@ -186,6 +198,9 @@ func ensureAccount(ctx context.Context, tx Tx, column, value string) (string, er
 		`SELECT id FROM point_account WHERE `+column+` = $1`, value).Scan(&id)
 	if err == nil {
 		return id, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
 	}
 	id = newID()
 	var ownerUserID, organizationID *string

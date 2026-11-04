@@ -1,0 +1,68 @@
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "skillsignal",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-26",
+	"workers_dev": true,
+	"preview_urls": false,
+	"observability": { "enabled": true },
+	"version_metadata": { "binding": "VERSION" },
+	// The Containers ignore inactivity while they poll PostgreSQL, so each minute
+	// renews their timeout and restarts any that exited.
+	"triggers": { "crons": ["* * * * *"] },
+	"vars": {
+		"WEB_URL": "https://skillsignal.therajveersingh.workers.dev"
+	},
+	"assets": {
+		"directory": "../web/dist",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": ["/api/*", "/healthz", "/readyz", "/__storage/*"]
+	},
+	"containers": [
+		{
+			"class_name": "BackendContainer",
+			"scheduling_policy": "durable_object",
+			"images": {
+				"base": {
+					"dockerfile": "./Dockerfile",
+					"build_context": "../.."
+				}
+			}
+		},
+		{
+			"class_name": "ParserContainer",
+			"scheduling_policy": "durable_object",
+			"images": {
+				"base": {
+					"dockerfile": "./Dockerfile",
+					"build_context": "../.."
+				}
+			}
+		},
+		{
+			"class_name": "InferenceContainer",
+			"scheduling_policy": "durable_object",
+			"images": {
+				"base": {
+					"dockerfile": "./Dockerfile",
+					"build_context": "../.."
+				}
+			}
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{ "name": "BACKEND", "class_name": "BackendContainer" },
+			{ "name": "PARSER", "class_name": "ParserContainer" },
+			{ "name": "INFERENCE", "class_name": "InferenceContainer" }
+		]
+	},
+	"exports": {
+		"BackendContainer": { "type": "durable-object", "storage": "sqlite" },
+		"ParserContainer": { "type": "durable-object", "storage": "sqlite" },
+		"InferenceContainer": { "type": "durable-object", "storage": "sqlite" }
+	},
+	"r2_buckets": [
+		{ "binding": "OBJECTS", "bucket_name": "skillsignal-objects" }
+	]
+}

@@ -152,7 +152,7 @@ export const CreateJobDialog = ({
 						value={description}
 					/>
 					<Input
-						accept=".pdf,.docx,.txt"
+						accept=".pdf,.docx,.txt,.md,.markdown,.html,.htm"
 						id="create-job-description-file"
 						onChange={(event) => {
 							const selected =
@@ -163,7 +163,8 @@ export const CreateJobDialog = ({
 						type="file"
 					/>
 					<p className="form-hint">
-						Paste a description or upload a PDF, DOCX, or TXT file.
+						Paste a description or upload a PDF, DOCX, TXT,
+						Markdown, or HTML file.
 					</p>
 				</div>
 				<div className="modal-actions">

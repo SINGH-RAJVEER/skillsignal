@@ -20,6 +20,7 @@ type User struct {
 	Email         string    `json:"email"`
 	AccountType   string    `json:"accountType"`
 	EmailVerified bool      `json:"emailVerified"`
+	IsDemo        bool      `json:"isDemo"`
 	Image         *string   `json:"image"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
@@ -68,6 +69,12 @@ func Register(mux *http.ServeMux, store Store, jwtSecret string, jwtTTL time.Dur
 	mux.HandleFunc("POST /api/auth/sign-in/email", h.signIn)
 	mux.HandleFunc("POST /api/auth/sign-out", h.signOut)
 	mux.HandleFunc("GET /api/auth/session", h.session)
+	mux.HandleFunc("GET /api/me", h.me)
+	mux.HandleFunc("POST /api/employer/auth/sign-up/email", h.signUp)
+	mux.HandleFunc("POST /api/employer/auth/sign-in/email", h.signIn)
+	if pg, ok := store.(*PostgresStore); ok {
+		h.registerOrganizations(mux, pg)
+	}
 }
 
 func (h *handler) signUp(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +93,19 @@ func (h *handler) signUp(w http.ResponseWriter, r *http.Request) {
 		h.internalError(w, err)
 		return
 	}
-	user, err := h.store.RegisterCandidate(r.Context(), name, email, passwordHash)
+	var user User
+	if strings.HasPrefix(r.URL.Path, "/api/employer/") {
+		registrar, ok := h.store.(interface {
+			RegisterEmployer(context.Context, string, string, string) (User, error)
+		})
+		if !ok {
+			h.internalError(w, errors.New("employer registration unavailable"))
+			return
+		}
+		user, err = registrar.RegisterEmployer(r.Context(), name, email, passwordHash)
+	} else {
+		user, err = h.store.RegisterCandidate(r.Context(), name, email, passwordHash)
+	}
 	if errors.Is(err, ErrEmailAlreadyUsed) {
 		httpx.WriteError(w, http.StatusConflict, httpx.CodeEmailAlreadyExists, "Email is already registered")
 		return
@@ -109,7 +128,11 @@ func (h *handler) signIn(w http.ResponseWriter, r *http.Request) {
 		h.internalError(w, err)
 		return
 	}
-	if err != nil || user.AccountType != "candidate" || !auth.CheckPassword(input.Password, passwordHash) {
+	expectedType := "candidate"
+	if strings.HasPrefix(r.URL.Path, "/api/employer/") {
+		expectedType = "employer"
+	}
+	if err != nil || user.AccountType != expectedType || !auth.CheckPassword(input.Password, passwordHash) {
 		httpx.WriteError(w, http.StatusUnauthorized, httpx.CodeInvalidEmailOrPassword, "Invalid email or password")
 		return
 	}
@@ -172,4 +195,33 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func (h *handler) me(w http.ResponseWriter, r *http.Request) {
+	u, ok := h.requireUser(w, r, false)
+	if !ok {
+		return
+	}
+	writeJSON(w, 200, map[string]User{"user": u})
+}
+func (h *handler) requireUser(w http.ResponseWriter, r *http.Request, mutate bool) (User, bool) {
+	id, err := auth.Authenticate(auth.BearerToken(r.Header.Get("Authorization")), h.jwtSecret, h.clock())
+	if err != nil {
+		httpx.WriteError(w, 401, "UNAUTHORIZED", "Authentication required")
+		return User{}, false
+	}
+	u, err := h.store.User(r.Context(), id)
+	if errors.Is(err, ErrNotFound) {
+		httpx.WriteError(w, 401, "UNAUTHORIZED", "Authentication required")
+		return User{}, false
+	}
+	if err != nil {
+		h.internalError(w, err)
+		return User{}, false
+	}
+	if mutate && u.IsDemo {
+		httpx.WriteError(w, 403, "DEMO_ACCOUNT", "Demo accounts are read-only")
+		return User{}, false
+	}
+	return u, true
 }

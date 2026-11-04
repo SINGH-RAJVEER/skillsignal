@@ -19,3 +19,5 @@ use ./apps/documents
 use ./apps/evaluation
 
 use ./apps/billing
+
+use ./apps/supervisor

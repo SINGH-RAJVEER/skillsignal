@@ -5,6 +5,7 @@ import { Textarea } from "@skillsignal/ui/components/textarea";
 import { AlertTriangle, FileDown, FileSearch, Trash2 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { ThinkingOrb } from "thinking-orbs";
+import { useDemoTourAction } from "../tour/DemoTour";
 import { BillingStrip, PackPurchase, usePointsSummary } from "./BillingPanel";
 import {
 	candidateClient,
@@ -21,6 +22,16 @@ const PROCESSING_STEPS = [
 
 const isPendingStatus = (status: IndependentEvaluation["status"]) =>
 	status === "queued" || status === "processing";
+
+const reportScore = (evaluation: IndependentEvaluation) =>
+	evaluation.jobDescriptionProvided
+		? evaluation.score
+		: (evaluation.generalQualityScore ?? evaluation.score);
+
+const reportScoreLabel = (evaluation: IndependentEvaluation) => {
+	const score = reportScore(evaluation);
+	return score === null ? evaluation.status : `${score}/100`;
+};
 
 export const PrivateEvaluationWorkspace = () => {
 	const [isWorking, setIsWorking] = useState(false);
@@ -135,7 +146,7 @@ export const PrivateEvaluationWorkspace = () => {
 		}
 	};
 
-	const openPrivateEvaluation = async (evaluationId: string) => {
+	const openPrivateEvaluation = useCallback(async (evaluationId: string) => {
 		setError(null);
 		try {
 			setPrivateEvaluation(
@@ -148,7 +159,26 @@ export const PrivateEvaluationWorkspace = () => {
 					: "Report could not be opened",
 			);
 		}
-	};
+	}, []);
+	const showSeededReport = useCallback(async () => {
+		try {
+			const history = await candidateClient.independentEvaluations();
+			setPrivateHistory(history);
+			const evaluation =
+				history.find((item) => item.status === "complete") ??
+				history[0];
+			if (evaluation) setPrivateEvaluation(evaluation);
+		} catch (reason) {
+			setError(
+				reason instanceof Error
+					? reason.message
+					: "The seeded private report could not be loaded.",
+			);
+		}
+	}, []);
+	const showHistory = useCallback(() => setPrivateEvaluation(null), []);
+	useDemoTourAction("candidate-report", showSeededReport);
+	useDemoTourAction("candidate-history", showHistory);
 
 	const deleteEvaluation = async (evaluationId: string) => {
 		setDeletingId(evaluationId);
@@ -236,7 +266,7 @@ export const PrivateEvaluationWorkspace = () => {
 							<div className="candidate-file-alternative">
 								<span>or upload it</span>
 								<Input
-									accept=".pdf,.docx,.txt"
+									accept=".pdf,.docx,.txt,.md,.markdown,.html,.htm"
 									id="job-description-file"
 									key={`job-${fileInputKey}`}
 									onChange={(event) => {
@@ -249,6 +279,10 @@ export const PrivateEvaluationWorkspace = () => {
 									type="file"
 								/>
 							</div>
+							<p className="form-hint">
+								PDF, DOCX, TXT, Markdown, or HTML. Maximum 10
+								MB.
+							</p>
 						</div>
 						<Button
 							disabled={!privateResume || isWorking}
@@ -300,6 +334,7 @@ export const PrivateEvaluationWorkspace = () => {
 			<aside
 				className="candidate-history"
 				aria-labelledby="history-title"
+				data-tour="candidate-history"
 			>
 				<header>
 					<p className="eyebrow">Private archive</p>
@@ -384,9 +419,7 @@ export const PrivateEvaluationWorkspace = () => {
 												{evaluation.originalName}
 											</span>
 											<span className="history-meta">
-												{evaluation.score !== null
-													? `${evaluation.score}/100`
-													: evaluation.status}
+												{reportScoreLabel(evaluation)}
 												{" · "}
 												{new Date(
 													evaluation.createdAt,
@@ -515,7 +548,10 @@ const PrivateReport = ({
 	const warnings = facts.warnings ?? [];
 
 	return (
-		<article className="private-report report-preview">
+		<article
+			className="private-report report-preview"
+			data-tour="candidate-report"
+		>
 			<header>
 				<div>
 					<span>{evaluation.originalName}</span>
@@ -529,15 +565,60 @@ const PrivateReport = ({
 						: null}
 				</span>
 			</header>
-			<section className="report-score" aria-label="Resume readiness">
-				<strong>{evaluation.score ?? "–"}</strong>
-				<span>of 100 resume readiness</span>
-				<b>{readinessLabel(evaluation.score)}</b>
+			<section
+				className="report-score"
+				aria-label={
+					evaluation.jobDescriptionProvided
+						? "Documented role fit"
+						: "Resume readiness"
+				}
+			>
+				<strong>{reportScore(evaluation) ?? "–"}</strong>
+				<span>
+					of 100{" "}
+					{evaluation.jobDescriptionProvided
+						? "documented role fit"
+						: "resume readiness"}
+				</span>
+				{evaluation.jobDescriptionProvided ? (
+					<p>
+						Evidence coverage: {evaluation.evidenceCoverage ?? 0}%.
+						General resume quality:{" "}
+						{evaluation.generalQualityScore ?? "–"}/100.
+					</p>
+				) : (
+					<b>{readinessLabel(reportScore(evaluation))}</b>
+				)}
 				<p>
 					The score describes this document, not your ability. Missing
 					evidence is not treated as a proven lack of experience.
 				</p>
 			</section>
+			{(evaluation.requirementAssessments?.length ?? 0) > 0 && (
+				<section className="report-section">
+					<h4>Job requirement evidence</h4>
+					{evaluation.requirementAssessments?.map((assessment) => (
+						<div
+							className="suggestion-row"
+							key={assessment.requirementId}
+						>
+							<b>{assessment.requirement}</b>
+							<p>
+								{assessment.outcome.replace(/_/g, " ")}.{" "}
+								{assessment.reasoning}
+							</p>
+							{assessment.evidence.map((item) => (
+								<blockquote
+									key={`${item.blockId}-${item.quote}`}
+								>
+									{item.quote}
+									<cite>Source block: {item.blockId}</cite>
+								</blockquote>
+							))}
+						</div>
+					))}
+				</section>
+			)}
 
 			{warnings.length > 0 && (
 				<section className="report-section report-warnings">

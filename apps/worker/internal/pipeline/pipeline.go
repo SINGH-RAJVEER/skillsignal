@@ -23,20 +23,14 @@ import (
 	"github.com/skillsignal/contracts/jobs"
 	parser "github.com/skillsignal/worker/internal/docparse"
 	"github.com/skillsignal/worker/internal/evaluator"
-	"github.com/skillsignal/worker/internal/extractor"
-	"github.com/skillsignal/worker/internal/modelschemas"
 	"github.com/skillsignal/worker/internal/normalizer"
 	"github.com/skillsignal/worker/internal/openrouter"
-	"github.com/skillsignal/worker/internal/prompts"
+	"github.com/skillsignal/worker/internal/semantic"
 )
 
 const (
-	// DeterministicExtractionWarning marks reports built without the model.
-	DeterministicExtractionWarning = "Structured extraction was unavailable; only deterministic facts were used"
 	// AssessmentUnavailableDegradation marks unevaluated model assessment.
 	AssessmentUnavailableDegradation = "Model assessment was unavailable; deterministic outcomes were used"
-	// AssessmentFailureDegradation marks failed model assessment.
-	AssessmentFailureDegradation = "Model assessment failed after retries; deterministic outcomes were used"
 )
 
 // NonRetryableError fails a job without requeueing.
@@ -64,20 +58,25 @@ type Worker struct {
 	pool     *pgxpool.Pool
 	settings config.Settings
 	models   *openrouter.Client
-	store    *storage.Store
+	store    storage.Store
 	role     jobs.Role
 	jobTypes []string
 }
 
 // New builds a worker restricted to the durable job types owned by role.
-func New(pool *pgxpool.Pool, settings config.Settings, store *storage.Store, role jobs.Role) *Worker {
+func New(pool *pgxpool.Pool, settings config.Settings, store storage.Store, role jobs.Role) *Worker {
 	var models *openrouter.Client
-	if role == jobs.InferenceRole && settings.OpenRouter.APIKey != "" {
+	if role == jobs.InferenceRole {
 		models = openrouter.New(
 			settings.OpenRouter.APIKey,
 			settings.OpenRouter.BaseURL,
 			time.Duration(settings.OpenRouter.TimeoutSeconds*float64(time.Second)),
 		)
+	}
+	if models != nil {
+		models.ConfigureFallbacks("extraction", settings.OpenRouter.ExtractionModel, settings.OpenRouter.ExtractionFallbacks)
+		models.ConfigureFallbacks("assessment", settings.OpenRouter.AssessmentModel, settings.OpenRouter.AssessmentFallbacks)
+		models.ConfigureFallbacks("embedding", settings.OpenRouter.EmbeddingModel, settings.OpenRouter.EmbeddingFallbacks)
 	}
 	return &Worker{
 		pool: pool, settings: settings, models: models, store: store,
@@ -107,6 +106,11 @@ func (w *Worker) Run(ctx context.Context) {
 
 // RunOnce claims and processes a single job.
 func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
+	if w.models != nil {
+		if err := w.models.ValidateConfigured(); err != nil {
+			return false, err
+		}
+	}
 	job, err := w.claim(ctx)
 	if err != nil {
 		return false, err
@@ -126,6 +130,12 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		w.heartbeat(heartbeatCtx, job)
 	}()
 	dispatchErr := w.dispatch(ctx, job)
+	finalReport := job.Type == string(jobs.EvaluationProcess) || job.Type == string(jobs.IndependentEvaluationEnrich)
+	if dispatchErr != nil || !finalReport {
+		if err := w.persistModelCalls(ctx, job); err != nil {
+			dispatchErr = err
+		}
+	}
 	stopHeartbeat()
 	<-heartbeatDone
 	switch classified := dispatchErr.(type) {
@@ -169,7 +179,7 @@ func (w *Worker) heartbeat(ctx context.Context, job *ClaimedJob) {
 			expiresAt := time.Now().UTC().Add(time.Duration(w.settings.WorkerLeaseSeconds) * time.Second)
 			tag, err := w.pool.Exec(context.Background(),
 				`UPDATE processing_job SET lease_expires_at = $1
-				 WHERE id = $2 AND lease_token = $3 AND status = 'processing'`,
+				 WHERE id = $2 AND lease_token = $3 AND status = 'processing' AND lease_expires_at > now()`,
 				expiresAt, job.ID, job.LeaseToken)
 			if err != nil {
 				log.Printf("lease renewal failed for job %s: %v", job.ID, err)
@@ -180,18 +190,6 @@ func (w *Worker) heartbeat(ctx context.Context, job *ClaimedJob) {
 			}
 		}
 	}
-}
-
-// requeueOrDegrade requeues on transient model failures while attempts
-// remain; on the final attempt it returns nil so the caller degrades.
-func (w *Worker) requeueOrDegrade(job *ClaimedJob, stage string, err error) error {
-	if _, ok := err.(*openrouter.RetryableError); !ok {
-		return nil
-	}
-	if job.AttemptCount < job.MaximumAttempts {
-		return &RetryableError{Message: stage + " hit a transient provider failure"}
-	}
-	return nil
 }
 
 func (w *Worker) claim(ctx context.Context) (*ClaimedJob, error) {
@@ -265,16 +263,9 @@ func (w *Worker) queueFollowupJob(ctx context.Context, current *ClaimedJob, next
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var active bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS (
-		    SELECT 1 FROM processing_job
-		    WHERE id = $1 AND lease_token = $2 AND lease_expires_at > now())`,
-		current.ID, current.LeaseToken).Scan(&active); err != nil {
+	active, err := lockLease(ctx, tx, current)
+	if err != nil || !active {
 		return err
-	}
-	if !active {
-		return nil
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO processing_job (
@@ -289,11 +280,11 @@ func (w *Worker) queueFollowupJob(ctx context.Context, current *ClaimedJob, next
 }
 
 func (w *Worker) prepareEvaluation(ctx context.Context, job *ClaimedJob) error {
-	tx, err := w.pool.Begin(ctx)
-	if err != nil {
-		return err
+	if w.models == nil {
+		return &NonRetryableError{Message: "Inference is not configured"}
 	}
-	defer tx.Rollback(ctx)
+	var err error
+	tx := w.pool
 	var factsJSON []byte
 	var jobVersionID string
 	var resumeVersionID string
@@ -349,84 +340,129 @@ func (w *Worker) prepareEvaluation(ctx context.Context, job *ClaimedJob) error {
 	assessmentDegradation := AssessmentUnavailableDegradation
 	assessmentSchemaVersion := (*string)(nil)
 	assessmentPromptVersion := (*string)(nil)
+	semanticByRequirement := make(map[string][]map[string]any)
+	if qualityState != "ready" {
+		return &NonRetryableError{Message: "Resume extraction quality is insufficient"}
+	}
 	if w.models != nil {
-		blockRows, err := tx.Query(ctx, `
-			SELECT block->>'id', block->>'text'
-			FROM resume_version, jsonb_array_elements(extraction_blocks->'blocks') AS block
-			WHERE id = $1`, resumeVersionID)
+		doc, _, err := w.loadParsedResume(ctx, resumeVersionID)
 		if err != nil {
 			return err
 		}
 		blockTexts := make(map[string]string)
-		blocks := make([]any, 0)
+		for _, block := range scoringBlocks(doc.Blocks) {
+			blockTexts[block.ID] = block.Text
+		}
+		modelRequirements := make([]map[string]any, 0, len(requirements))
+		for _, requirement := range requirements {
+			if requirement["kind"] == "ignored" || requirement["assessability"] != "resume_evidence" {
+				continue
+			}
+			if _, ok := requirement["id"].(string); ok {
+				modelRequirements = append(modelRequirements, requirement)
+			}
+		}
+		blockRows, err := tx.Query(ctx, `SELECT block_id, model, vector::text FROM resume_block_embedding WHERE resume_version_id = $1`, resumeVersionID)
+		if err != nil {
+			return err
+		}
+		blockVectors := make(map[string][]float64)
+		storedModel := ""
 		for blockRows.Next() {
-			var id, text string
-			if err := blockRows.Scan(&id, &text); err != nil {
+			var id, model, vectorJSON string
+			if err := blockRows.Scan(&id, &model, &vectorJSON); err != nil {
 				blockRows.Close()
 				return err
 			}
-			blockTexts[id] = text
-			blocks = append(blocks, map[string]any{"id": id, "text": text})
+			if storedModel != "" && storedModel != model {
+				blockRows.Close()
+				return &NonRetryableError{Message: "Stored embeddings mix incompatible models"}
+			}
+			storedModel = model
+			var vector []float64
+			if err := json.Unmarshal([]byte(vectorJSON), &vector); err != nil {
+				blockRows.Close()
+				return err
+			}
+			if blockTexts[id] != "" {
+				blockVectors[id] = vector
+			}
 		}
 		blockRows.Close()
 		if err := blockRows.Err(); err != nil {
 			return err
 		}
-		modelRequirements := make([]map[string]any, 0, len(requirements))
-		requirementIDs := make(map[string]bool, len(requirements))
-		for _, requirement := range requirements {
-			if requirement["kind"] == "ignored" || requirement["assessability"] != "resume_evidence" {
-				continue
+		semanticTexts := make([]string, 0, len(modelRequirements))
+		for _, requirement := range modelRequirements {
+			semanticTexts = append(semanticTexts, requirement["normalizedText"].(string))
+		}
+		if len(semanticTexts) > 0 && len(blockVectors) > 0 {
+			vectors, err := w.models.EmbedTextsExact(storedModel, semanticTexts)
+			if err != nil {
+				return w.modelFailure(job, "Requirement semantic retrieval", err)
 			}
-			if id, ok := requirement["id"].(string); ok {
-				requirementIDs[id] = true
-				modelRequirements = append(modelRequirements, requirement)
+			for index, requirement := range modelRequirements {
+				id := requirement["id"].(string)
+				for _, match := range semantic.TopSemanticMatches(vectors[index], blockVectors) {
+					semanticByRequirement[id] = append(semanticByRequirement[id], map[string]any{
+						"blockId": match.BlockID, "text": blockTexts[match.BlockID], "similarity": match.Similarity,
+					})
+				}
+				requirement["semanticEvidence"] = semanticByRequirement[id]
 			}
 		}
-		raw, err := w.models.CompleteJSON(
-			w.settings.OpenRouter.AssessmentModel,
-			prompts.AssessmentSystemPrompt,
-			map[string]any{"requirements": modelRequirements, "resumeBlocks": blocks},
-			"requirement_assessments",
-			modelschemas.AssessmentOutput(),
-			w.settings.OpenRouter.MaxOutputTokens,
-		)
-		if err == nil {
-			modelAssessments, validationErr := extractor.ValidateAssessments(raw, requirementIDs, blockTexts)
-			if validationErr == nil {
-				assessments = evaluator.RefineAssessments(assessments, modelAssessments, requirements)
-				assessmentDegradation = ""
-				schemaVersion := versions.RequirementAssessmentSchemaVer
-				promptVersion := versions.AssessmentPromptVersion
-				assessmentSchemaVersion = &schemaVersion
-				assessmentPromptVersion = &promptVersion
-			} else {
-				log.Printf("job %s: model assessment validation failed; using deterministic outcomes: %v", job.ID, validationErr)
-				assessmentDegradation = AssessmentFailureDegradation
+		var modelAssessments []map[string]any
+		for _, requirement := range modelRequirements {
+			id := requirement["id"].(string)
+			retrieved := make(map[string]string)
+			for _, match := range semanticByRequirement[id] {
+				blockID := match["blockId"].(string)
+				retrieved[blockID] = blockTexts[blockID]
 			}
-		} else {
-			if _, ok := err.(*openrouter.RetryableError); ok {
-				if rerr := w.requeueOrDegrade(job, "Requirement assessment", err); rerr != nil {
-					return rerr
+			for _, evidence := range deterministicEvidence[id] {
+				if text := blockTexts[evidence.BlockID]; text != "" {
+					retrieved[evidence.BlockID] = text
 				}
 			}
-			log.Printf("job %s: model assessment failed; using deterministic outcomes: %v", job.ID, err)
-			assessmentDegradation = AssessmentFailureDegradation
+			validated, err := w.assessCriterion(job, requirement, retrieved)
+			if err != nil {
+				return err
+			}
+			modelAssessments = append(modelAssessments, validated...)
 		}
+		assessments = evaluator.RefineAssessments(assessments, modelAssessments, requirements)
+		assessmentDegradation = ""
+		schemaVersion := versions.RequirementAssessmentSchemaVer
+		promptVersion := versions.AssessmentPromptVersion
+		assessmentSchemaVersion = &schemaVersion
+		assessmentPromptVersion = &promptVersion
+	}
+	writeTx, err := w.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer writeTx.Rollback(ctx)
+	active, err := lockLease(ctx, writeTx, job)
+	if err != nil || !active {
+		return err
 	}
 	result := evaluator.Summarize(assessments, requirements)
+	if err := w.persistModelCallsTx(ctx, writeTx, job); err != nil {
+		return err
+	}
 	for _, assessment := range result.Assessments {
-		if _, err := tx.Exec(ctx, `
+		if _, err := writeTx.Exec(ctx, `
 			INSERT INTO requirement_assessment
-				(id, evaluation_id, job_requirement_id, outcome, confidence, reasoning, evidence, deterministic_evidence)
-			VALUES ($1, $2, $3, $4, $5, $6, CAST($7 AS jsonb), CAST($8 AS jsonb))
+				(id, evaluation_id, job_requirement_id, outcome, confidence, reasoning, evidence, deterministic_evidence, semantic_evidence)
+			VALUES ($1, $2, $3, $4, $5, $6, CAST($7 AS jsonb), CAST($8 AS jsonb), CAST($9 AS jsonb))
 			ON CONFLICT (evaluation_id, job_requirement_id) DO UPDATE SET
 				outcome = EXCLUDED.outcome, confidence = EXCLUDED.confidence,
 				reasoning = EXCLUDED.reasoning, evidence = EXCLUDED.evidence,
-				deterministic_evidence = EXCLUDED.deterministic_evidence`,
+				deterministic_evidence = EXCLUDED.deterministic_evidence,
+				semantic_evidence = EXCLUDED.semantic_evidence`,
 			newID(), job.PayloadReference, assessment.RequirementID,
 			assessment.Outcome, assessment.Confidence, assessment.Reasoning,
-			marshalJSON(assessment.Evidence), marshalJSON(deterministicEvidence[assessment.RequirementID])); err != nil {
+			marshalJSON(assessment.Evidence), marshalJSON(deterministicEvidence[assessment.RequirementID]), marshalJSON(semanticByRequirement[assessment.RequirementID])); err != nil {
 			return err
 		}
 	}
@@ -434,7 +470,7 @@ func (w *Worker) prepareEvaluation(ctx context.Context, job *ClaimedJob) error {
 	if result.Score != nil {
 		score = *result.Score
 	}
-	if _, err := tx.Exec(ctx, `
+	tag, err := writeTx.Exec(ctx, `
 		UPDATE evaluation SET status = 'complete', score = $1,
 			evidence_coverage = $2, eligibility = $3, quality_state = $4,
 			scoring_policy_version = $5, assessment_schema_version = $6,
@@ -445,18 +481,31 @@ func (w *Worker) prepareEvaluation(ctx context.Context, job *ClaimedJob) error {
 			WHERE id = $10 AND lease_token = $11 AND lease_expires_at > now())`,
 		score, result.EvidenceCoverage, result.Eligibility, qualityState,
 		"criterion-weighted-1", assessmentSchemaVersion, assessmentPromptVersion,
-		nullableIfEmpty(assessmentDegradation), job.PayloadReference, job.ID, job.LeaseToken); err != nil {
+		nullableIfEmpty(assessmentDegradation), job.PayloadReference, job.ID, job.LeaseToken)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil
 	}
 	if reservationID != nil {
 		promptTokens, completionTokens, reportedCost := w.modelUsage()
 		charged := settlePointsFromUsage(promptTokens, completionTokens, reportedCost,
 			"employer_resume", w.settings.Billing)
-		if err := settleReservation(ctx, tx, *reservationID, charged, "Employer evaluation charge"); err != nil {
+		if err := settleReservation(ctx, writeTx, *reservationID, charged, "Employer evaluation charge"); err != nil {
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	if err := completeReportJob(ctx, writeTx, job); err != nil {
+		return err
+	}
+	return writeTx.Commit(ctx)
+}
+
+func completeReportJob(ctx context.Context, tx pgx.Tx, job *ClaimedJob) error {
+	_, err := tx.Exec(ctx, `UPDATE processing_job SET status = 'completed', lease_token = NULL,
+		lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND lease_token = $2`, job.ID, job.LeaseToken)
+	return err
 }
 
 func (w *Worker) complete(ctx context.Context, job *ClaimedJob) error {
@@ -472,23 +521,31 @@ func (w *Worker) fail(ctx context.Context, job *ClaimedJob, message string, retr
 		}
 		return nil
 	}
-	updated, err := w.updateJobReturning(ctx, job, "dead", &message, nil)
+	tx, err := w.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if !updated {
-		return nil
+	defer tx.Rollback(ctx)
+	active, err := lockLease(ctx, tx, job)
+	if err != nil || !active {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE processing_job SET status = 'dead', safe_error = $1,
+		lease_token = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $2`, message, job.ID); err != nil {
+		return err
 	}
 	switch job.Type {
 	case string(jobs.IndependentEvaluationParse), string(jobs.IndependentEvaluationEnrich):
-		return w.failIndependentEvaluation(ctx, job, message)
+		err = w.failIndependentEvaluation(ctx, tx, job, message)
 	case string(jobs.ResumeParse), string(jobs.ResumeEnrich):
-		return w.failResume(ctx, job)
+		err = w.failResume(ctx, tx, job)
 	case string(jobs.EvaluationProcess):
-		return w.failEvaluation(ctx, job)
-	default:
-		return nil
+		err = w.failEvaluation(ctx, tx, job)
 	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (w *Worker) updateJob(ctx context.Context, job *ClaimedJob, status string, safeError *string, availableAt *time.Time) error {
@@ -507,7 +564,7 @@ func (w *Worker) updateJobReturning(ctx context.Context, job *ClaimedJob, status
 		`UPDATE processing_job
 		 SET status = $1, safe_error = $2, available_at = COALESCE($3, available_at),
 		     lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-		 WHERE id = $4 AND lease_token = $5
+		 WHERE id = $4 AND lease_token = $5 AND status = 'processing' AND lease_expires_at > now()
 		 RETURNING id`,
 		status, safeError, availableAt, job.ID, job.LeaseToken).Scan(&id)
 	if err == pgx.ErrNoRows {
@@ -519,12 +576,7 @@ func (w *Worker) updateJobReturning(ctx context.Context, job *ClaimedJob, status
 	return true, tx.Commit(ctx)
 }
 
-func (w *Worker) failIndependentEvaluation(ctx context.Context, job *ClaimedJob, message string) error {
-	tx, err := w.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
+func (w *Worker) failIndependentEvaluation(ctx context.Context, tx pgx.Tx, job *ClaimedJob, message string) error {
 	if _, err := tx.Exec(ctx,
 		`UPDATE independent_evaluation SET status = 'failed', safe_error = $1 WHERE id = $2`,
 		message, job.PayloadReference); err != nil {
@@ -547,15 +599,10 @@ func (w *Worker) failIndependentEvaluation(ctx context.Context, job *ClaimedJob,
 		job.PayloadReference); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
-func (w *Worker) failResume(ctx context.Context, job *ClaimedJob) error {
-	tx, err := w.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
+func (w *Worker) failResume(ctx context.Context, tx pgx.Tx, job *ClaimedJob) error {
 	if _, err := tx.Exec(ctx,
 		`UPDATE resume_version
 		 SET quality_state = CASE WHEN quality_state = 'pending' THEN 'failed' ELSE quality_state END
@@ -573,15 +620,10 @@ func (w *Worker) failResume(ctx context.Context, job *ClaimedJob) error {
 	if err := releaseEvaluationReservations(ctx, tx, "resume_version_id = $1", []any{job.PayloadReference}); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
-func (w *Worker) failEvaluation(ctx context.Context, job *ClaimedJob) error {
-	tx, err := w.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
+func (w *Worker) failEvaluation(ctx context.Context, tx pgx.Tx, job *ClaimedJob) error {
 	if _, err := tx.Exec(ctx,
 		`UPDATE evaluation SET status = 'failed', eligibility = 'needs_review', completed_at = now()
 		 WHERE id = $1`, job.PayloadReference); err != nil {
@@ -590,48 +632,25 @@ func (w *Worker) failEvaluation(ctx context.Context, job *ClaimedJob) error {
 	if err := releaseEvaluationReservations(ctx, tx, "id = $1", []any{job.PayloadReference}); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 // prepareDocument parses with a wall-clock bound; the parse runs on a
 // worker goroutine so an overlong document fails safely on timeout.
 func prepareDocumentBounded(content []byte, mediaType string, timeout time.Duration) (parser.ParsedDocument, []normalizer.Block, map[string]any, error) {
-	type outcome struct {
-		doc    parser.ParsedDocument
-		blocks []normalizer.Block
-		facts  map[string]any
-		err    error
+	doc, err := parseSubprocess(content, mediaType, timeout, false)
+	if err != nil {
+		return parser.ParsedDocument{}, nil, nil, err
 	}
-	done := make(chan outcome, 1)
-	go func() {
-		doc, err := parser.ExtractBlocks(content, mediaType)
-		if err != nil {
-			done <- outcome{err: err}
-			return
-		}
-		blocks := make([]normalizer.Block, 0, len(doc.Blocks))
-		for _, block := range doc.Blocks {
-			blocks = append(blocks, normalizer.Block{ID: block.ID, Text: block.Text})
-		}
-		facts, err := normalizer.Normalize(blocks)
-		if err != nil {
-			done <- outcome{err: err}
-			return
-		}
-		normalized := map[string]any{
-			"contact": contactToMap(facts.Contact),
-			"skills":  skillsToMaps(facts.Skills),
-		}
-		done <- outcome{doc: doc, blocks: blocks, facts: normalized}
-	}()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case result := <-done:
-		return result.doc, result.blocks, result.facts, result.err
-	case <-timer.C:
-		return parser.ParsedDocument{}, nil, nil, &NonRetryableError{Message: "Document parsing exceeded the configured time limit"}
+	blocks := make([]normalizer.Block, 0, len(doc.Blocks))
+	for _, block := range doc.Blocks {
+		blocks = append(blocks, normalizer.Block{ID: block.ID, Text: block.Text})
 	}
+	facts, err := normalizer.Normalize(blocks)
+	if err != nil {
+		return parser.ParsedDocument{}, nil, nil, err
+	}
+	return doc, blocks, map[string]any{"contact": contactToMap(facts.Contact), "skills": skillsToMaps(facts.Skills)}, nil
 }
 
 func contactToMap(contact map[string]*string) map[string]any {

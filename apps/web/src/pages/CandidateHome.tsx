@@ -1,8 +1,9 @@
 import { Button } from "@skillsignal/ui/components/button";
 import { ClipboardCheck, FileSearch } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { CandidateSubmissionWorkspace } from "../features/candidate/CandidateSubmissionWorkspace";
 import { PrivateEvaluationWorkspace } from "../features/candidate/PrivateEvaluationWorkspace";
+import { useDemoTourAction } from "../features/tour/DemoTour";
 import { authClient } from "../lib/auth-client";
 
 type CandidateTask = "private-check" | "job-submission";
@@ -10,6 +11,8 @@ type CandidateTask = "private-check" | "job-submission";
 export const CandidateHome = () => {
 	const { data: session } = authClient.useSession();
 	const [task, setTask] = useState<CandidateTask>("private-check");
+	const showReceipts = useCallback(() => setTask("job-submission"), []);
+	useDemoTourAction("candidate-receipts", showReceipts);
 
 	return (
 		<main className="candidate-page">
@@ -42,6 +45,7 @@ export const CandidateHome = () => {
 				<nav
 					aria-label="Candidate tasks"
 					className="candidate-task-nav"
+					data-tour="candidate-tasks"
 				>
 					<Button
 						aria-pressed={task === "private-check"}

@@ -4,9 +4,10 @@ go 1.26.0
 
 require (
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/skillsignal/backend v0.0.0
+	github.com/skillsignal/backend v0.0.0-00010101000000-000000000000
 	github.com/skillsignal/contracts v0.0.0
 	golang.org/x/crypto v0.57.0
+	golang.org/x/net v0.58.0
 	golang.org/x/text v0.42.0
 )
 

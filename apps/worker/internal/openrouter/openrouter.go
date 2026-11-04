@@ -9,8 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"time"
+
+	"github.com/skillsignal/backend/versions"
+	"github.com/skillsignal/worker/internal/schemas"
 )
 
 // RetryableStatusCodes are transient HTTP failures worth a bounded retry.
@@ -25,7 +29,10 @@ var RetryableErrorCodes = map[string]bool{
 }
 
 // Error is a non-retryable provider failure.
-type Error struct{ Message string }
+type Error struct {
+	Message  string
+	terminal bool
+}
 
 func (e *Error) Error() string { return e.Message }
 
@@ -36,6 +43,10 @@ func (e *RetryableError) Error() string { return e.Message }
 
 // Client accumulates per-job token usage and cost.
 type Client struct {
+	fallbacks        map[string][]string
+	catalog          map[string]map[string]any
+	catalogCheckedAt time.Time
+	calls            []Call
 	baseURL          string
 	timeout          time.Duration
 	headers          map[string]string
@@ -66,6 +77,7 @@ func New(apiKey, baseURL string, timeout time.Duration) *Client {
 // ResetUsage clears per-job accumulation before dispatching a job.
 func (c *Client) ResetUsage() {
 	c.promptTokens, c.completionTokens, c.costUSD = 0, 0, 0
+	c.calls = nil
 }
 
 // Usage returns accumulated prompt tokens, completion tokens, and cost.
@@ -91,6 +103,13 @@ func (c *Client) recordUsage(body map[string]any) {
 
 // CompleteJSON requests a strict-schema JSON object completion.
 func (c *Client) CompleteJSON(model, systemPrompt string, userParts any, schemaName string, schema map[string]any, maxOutputTokens int) (map[string]any, error) {
+	if _, isObject := userParts.(map[string]any); isObject {
+		encoded, err := json.Marshal(userParts)
+		if err != nil {
+			return nil, &Error{Message: "Model input encoding failed"}
+		}
+		userParts = string(encoded)
+	}
 	payload := map[string]any{
 		"model": model,
 		"messages": []any{
@@ -104,9 +123,42 @@ func (c *Client) CompleteJSON(model, systemPrompt string, userParts any, schemaN
 			},
 		},
 		"max_tokens": maxOutputTokens,
-		"provider":   map[string]any{"require_parameters": true, "data_collection": "deny"},
+		"provider":   map[string]any{"require_parameters": true},
 	}
-	body, err := c.post("/chat/completions", payload)
+	task := "extraction"
+	if schemaName == "requirement_assessments" {
+		task = "assessment"
+	}
+	firstCall := len(c.calls)
+	body, err := c.withFallback(model, task, false, func(candidate string) (map[string]any, error) {
+		payload["model"] = candidate
+		body, err := c.post("/chat/completions", payload)
+		if err == nil {
+			var parsed map[string]any
+			parsed, err = ParseJSONCompletion(body)
+			if err == nil {
+				switch schemaName {
+				case "resume_facts":
+					_, err = schemas.ValidateResumeExtraction(parsed)
+				case "requirement_assessments":
+					_, err = schemas.ValidateAssessmentOutput(parsed)
+				case "job_requirement_drafts":
+					_, _, err = schemas.ValidateRequirementExtraction(parsed)
+				}
+			}
+		}
+		return body, err
+	})
+	for index := firstCall; index < len(c.calls); index++ {
+		switch schemaName {
+		case "resume_facts":
+			c.calls[index].PromptVersion, c.calls[index].SchemaVersion = versions.ExtractionPromptVersion, versions.ResumeFactsSchemaVersion
+		case "job_requirement_drafts":
+			c.calls[index].PromptVersion, c.calls[index].SchemaVersion = versions.JobRequirementsPromptVersion, versions.JobRequirementsSchemaVersion
+		case "requirement_assessments":
+			c.calls[index].PromptVersion, c.calls[index].SchemaVersion = versions.AssessmentPromptVersion, versions.RequirementAssessmentSchemaVer
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -115,15 +167,44 @@ func (c *Client) CompleteJSON(model, systemPrompt string, userParts any, schemaN
 
 // EmbedTexts embeds inputs positionally.
 func (c *Client) EmbedTexts(model string, texts []string) ([][]float64, error) {
+	vectors, _, err := c.EmbedTextsWithModel(model, texts)
+	return vectors, err
+}
+
+// EmbedTextsWithModel reports the model whose coordinate space produced the vectors.
+func (c *Client) EmbedTextsWithModel(model string, texts []string) ([][]float64, string, error) {
+	return c.embedTexts(model, texts, true)
+}
+
+// EmbedTextsExact keeps retrieval queries in the stored vectors' coordinate space.
+func (c *Client) EmbedTextsExact(model string, texts []string) ([][]float64, error) {
+	vectors, _, err := c.embedTexts(model, texts, false)
+	return vectors, err
+}
+
+func (c *Client) embedTexts(model string, texts []string, fallback bool) ([][]float64, string, error) {
 	inputs := make([]any, 0, len(texts))
 	for _, text := range texts {
 		inputs = append(inputs, text)
 	}
-	body, err := c.post("/embeddings", map[string]any{"model": model, "input": inputs})
-	if err != nil {
-		return nil, err
+	task := "embedding"
+	if !fallback {
+		task = "embedding_exact"
 	}
-	return ParseEmbeddingResponse(body, len(inputs))
+	usedModel := model
+	body, err := c.withFallback(model, task, true, func(candidate string) (map[string]any, error) {
+		usedModel = candidate
+		body, err := c.post("/embeddings", map[string]any{"model": candidate, "input": inputs})
+		if err == nil {
+			_, err = ParseEmbeddingResponse(body, len(inputs))
+		}
+		return body, err
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	vectors, err := ParseEmbeddingResponse(body, len(inputs))
+	return vectors, usedModel, err
 }
 
 func (c *Client) post(path string, payload map[string]any) (map[string]any, error) {
@@ -159,11 +240,16 @@ func (c *Client) post(path string, payload map[string]any) (map[string]any, erro
 		if message == "" {
 			message = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
-		return nil, ClassifyStatus(resp.StatusCode, message)
+		_ = message
+		return nil, ClassifyStatus(resp.StatusCode, "Model provider request failed")
 	}
 	// OpenRouter can report upstream failures inside HTTP 200.
 	if errorObj, ok := body["error"].(map[string]any); ok {
-		return nil, ClassifyError(errorObj)
+		classified := ClassifyError(errorObj)
+		if _, ok := classified.(*RetryableError); ok {
+			return nil, &RetryableError{Message: "Model provider temporarily unavailable"}
+		}
+		return nil, &Error{Message: "Model provider request failed"}
 	}
 	c.recordUsage(body)
 	return body, nil
@@ -193,9 +279,9 @@ func ClassifyStatus(statusCode int, message string) error {
 	}
 	switch statusCode {
 	case 402:
-		return &Error{Message: "Model credits are exhausted"}
+		return &Error{Message: "Model credits are exhausted", terminal: true}
 	case 401, 403:
-		return &Error{Message: "Model credentials were rejected"}
+		return &Error{Message: "Model credentials were rejected", terminal: true}
 	default:
 		return &Error{Message: message}
 	}
@@ -234,7 +320,7 @@ func ParseEmbeddingResponse(body map[string]any, expectedCount int) ([][]float64
 		}
 		indexFloat, ok := toFloat(entry["index"])
 		index := int(indexFloat)
-		if !ok || index < 0 || index >= expectedCount {
+		if !ok || math.IsNaN(indexFloat) || math.IsInf(indexFloat, 0) || indexFloat != float64(index) || index < 0 || index >= expectedCount {
 			return nil, &Error{Message: "Embedding response indexes do not match the request"}
 		}
 		if _, exists := vectors[index]; exists {
@@ -247,7 +333,7 @@ func ParseEmbeddingResponse(body map[string]any, expectedCount int) ([][]float64
 		vector := make([]float64, 0, len(raw))
 		for _, value := range raw {
 			number, ok := toFloat(value)
-			if !ok {
+			if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
 				return nil, &Error{Message: "Embedding vector is not numeric"}
 			}
 			vector = append(vector, number)

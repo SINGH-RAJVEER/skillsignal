@@ -30,13 +30,16 @@ type BillingSettings struct {
 
 // OpenRouterSettings carries model selection and client limits.
 type OpenRouterSettings struct {
-	APIKey          string
-	BaseURL         string
-	ExtractionModel string
-	AssessmentModel string
-	EmbeddingModel  string
-	TimeoutSeconds  float64
-	MaxOutputTokens int
+	APIKey              string
+	BaseURL             string
+	ExtractionModel     string
+	AssessmentModel     string
+	EmbeddingModel      string
+	ExtractionFallbacks []string
+	AssessmentFallbacks []string
+	EmbeddingFallbacks  []string
+	TimeoutSeconds      float64
+	MaxOutputTokens     int
 }
 
 // Settings is the shared API/worker configuration.
@@ -46,6 +49,8 @@ type Settings struct {
 	JWTSecret                     string
 	JWTTTL                        time.Duration
 	StorageRoot                   string
+	ObjectStorageURL              string
+	ObjectStorageToken            string
 	IndependentRetentionDays      int
 	RetentionSweepIntervalSeconds int
 	Billing                       BillingSettings
@@ -150,6 +155,8 @@ func Load() (Settings, error) {
 		return Settings{}, fmt.Errorf("JWT_TTL %w", err)
 	}
 	settings.StorageRoot = envOr("STORAGE_ROOT", ".local-storage")
+	settings.ObjectStorageURL = os.Getenv("OBJECT_STORAGE_URL")
+	settings.ObjectStorageToken = os.Getenv("OBJECT_STORAGE_TOKEN")
 	settings.IndependentRetentionDays, err = intOr("INDEPENDENT_RETENTION_DAYS", "30")
 	if err != nil {
 		return Settings{}, err
@@ -204,11 +211,14 @@ func Load() (Settings, error) {
 	}
 
 	openrouter := OpenRouterSettings{
-		APIKey:          os.Getenv("OPENROUTER_API_KEY"),
-		BaseURL:         envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-		ExtractionModel: envOr("OPENROUTER_EXTRACTION_MODEL", "openai/gpt-5-mini"),
-		AssessmentModel: envOr("OPENROUTER_ASSESSMENT_MODEL", "openai/gpt-5-mini"),
-		EmbeddingModel:  envOr("OPENROUTER_EMBEDDING_MODEL", "qwen/qwen3-embedding-8b"),
+		APIKey:              os.Getenv("OPENROUTER_API_KEY"),
+		BaseURL:             envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+		ExtractionModel:     envOr("OPENROUTER_EXTRACTION_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
+		AssessmentModel:     envOr("OPENROUTER_ASSESSMENT_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
+		EmbeddingModel:      envOr("OPENROUTER_EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b:free"),
+		ExtractionFallbacks: fallbackModels("OPENROUTER_EXTRACTION_FALLBACKS", "liquid/lfm-2.5-2.6b:free"),
+		AssessmentFallbacks: fallbackModels("OPENROUTER_ASSESSMENT_FALLBACKS", "liquid/lfm-2.5-2.6b:free"),
+		EmbeddingFallbacks:  fallbackModels("OPENROUTER_EMBEDDING_FALLBACKS", "liquid/lfm-2.5-embedding-350m:free"),
 	}
 	if openrouter.TimeoutSeconds, err = floatOr("OPENROUTER_TIMEOUT_SECONDS", "90"); err != nil {
 		return Settings{}, err
@@ -224,4 +234,25 @@ func Load() (Settings, error) {
 // LLMEnabled reports whether model-backed extraction is configured.
 func (s Settings) LLMEnabled() bool {
 	return s.OpenRouter.APIKey != ""
+}
+
+func modelList(value string) []string {
+	var models []string
+	seen := make(map[string]bool)
+	for _, model := range strings.Split(value, ",") {
+		model = strings.TrimSpace(model)
+		if model != "" && !seen[model] {
+			models = append(models, model)
+			seen[model] = true
+		}
+	}
+	return models
+}
+
+func fallbackModels(key, fallback string) []string {
+	value, set := os.LookupEnv(key)
+	if !set {
+		value = fallback
+	}
+	return modelList(value)
 }

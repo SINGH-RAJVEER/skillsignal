@@ -1,0 +1,17 @@
+{
+	"name": "@skillsignal/edge",
+	"private": true,
+	"type": "module",
+	"version": "0.0.1",
+	"scripts": {
+		"typecheck": "tsgo --noEmit",
+		"lint": "biome check src test package.json tsconfig.json wrangler.jsonc",
+		"test": "bun test",
+		"check": "wrangler deploy --dry-run",
+		"deploy": "wrangler deploy"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "5.20261026.1",
+		"wrangler": "4.153.0"
+	}
+}

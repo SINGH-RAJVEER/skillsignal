@@ -14,6 +14,7 @@ interface AuthSession {
 		name: string;
 		email: string;
 		accountType: "employer" | "candidate";
+		isDemo?: boolean;
 		emailVerified: boolean;
 		image?: string | null;
 		createdAt: string;
@@ -174,6 +175,8 @@ export const authClient = {
 		}, []);
 		return state;
 	},
+	startDemo: (act: "employer" | "candidate") =>
+		authenticateWithBody("/api/demo/session", { act }),
 	signIn: {
 		email: (credentials: Credentials) =>
 			authenticate("/api/auth/sign-in/email", credentials),

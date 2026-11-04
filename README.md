@@ -1,143 +1,108 @@
 # SkillSignal
 
-A resume screening tool with two sides that never mix. Candidates run private
-checks on their own resumes and get a readiness score, suggestions, and a
-corrected DOCX built only from facts their document actually contains.
-Employers create roles, confirm the criteria that matter, upload or invite
-resumes, and review ranked, evidence-cited evaluations against those criteria.
+SkillSignal provides private candidate resume checks and employer evaluations against confirmed job requirements. Candidates receive a general resume-quality report or a job-specific report with criterion outcomes. Employer organizations own jobs, requirements, submissions, invitations, and evaluation results.
 
-Every score traces back to quoted text from the source document. The model
-stages, extraction and requirement assessment, run through OpenRouter with
-strict JSON schemas, and their output is validated locally before anything is
-stored. If no API key is configured, or a model call fails, everything falls
-back to deterministic parsing and scoring. The system never lets a model erase
-evidence that deterministic matching already found.
+Extraction and assessment use OpenRouter structured outputs with local validation. Inference requires an API key and free models with the required capabilities. Startup and periodic checks reject paid or incompatible models. Ordered fallbacks handle provider and output failures; exhausted inference fails the job and releases its unsettled point hold or weekly allowance. Application code calculates scores.
 
-## Scope
+OpenRouter may route resume data to underlying providers under their own retention and training policies. This release does not restrict provider routing by Zero Data Retention or training policy.
 
-What works today:
+## Implemented workflows
 
-- Email auth with separate employer and candidate account types.
-- Candidate private evaluations: PDF/DOCX/TXT upload, optional job description,
-  scored report, suggestions, corrected resume download.
-- Employer workspace: organizations with email-domain join policies, members
-  with owner/recruiter/viewer roles, jobs with draft criteria extracted from
-  descriptions, criteria confirmation into immutable versions, single and ZIP
-  batch resume uploads, candidate invitations by link or passcode gated on an
-  application window.
-- Evaluations: deterministic skill matching against an O*NET-backed vocabulary,
-  OpenRouter fact extraction and block embeddings for semantic evidence, with a
-  content-hash cache so repeated blocks cost nothing, per-requirement
-  assessment with cited evidence, weighted scores, hard-gate eligibility, CSV
-  export with selectable columns.
-- Points billing: ledgers for user and organization accounts, one free
-  evaluation per calendar week for independent users, one-time Razorpay
-  payments in INR, employer batch billing, and manually provisioned enterprise
-  entitlements.
-- Retention: resumes and everything derived from them expire after a
-  configurable number of days. The API sweeps expired data on a schedule, and
-  an operator can trigger a pass manually.
-- Tracing and metrics through OpenTelemetry when an OTLP endpoint is set.
+- Email authentication with separate employer and candidate account types, organization membership, owner/recruiter/viewer roles, and domain or email join policies.
+- Private PDF, DOCX, or TXT resume checks, optional pasted or uploaded job descriptions, evidence-backed reports, suggestions, and corrected DOCX downloads. Job descriptions also accept Markdown and HTML.
+- Employer jobs with versioned descriptions, recruiter-confirmed requirements, single-file and ZIP uploads, invitation links and passcodes, application windows, asynchronous processing, evidence inspection, and eligibility filters.
+- Criterion scores, evidence coverage, hard gates, eligible-only top matches, and CSV exports that preserve active filters and selected columns. Viewers cannot export.
+- Point ledgers, maximum-cost reservations, bounded settlement, one free independent evaluation per calendar week, Razorpay point packs in INR, and manually provisioned enterprise entitlements.
+- Recoverable submission intake and delivery. Retrying an upload with the same `Idempotency-Key` reuses its documents, submission, and hold; changing its files returns a conflict. Requests without a key begin separate operations.
+- Scheduled retention through the owning services, with pending delivery cancelled before derived data and source documents are removed.
+- A guided demo using shared, seeded, read-only employer and candidate accounts. The tour runs without inference or point charges.
 
-`POST /api/demo/session` seeds a pre-populated workspace and returns a token
-for either a demo employer or a demo candidate.
+The employer review-decision screen, complete operational telemetry, labeled model-quality evaluation, and the remaining evaluation suite are still pending. Catalog compatibility and fixture tests do not establish extraction accuracy or ranking quality.
 
-What is not built yet: the employer review-decision screen, the full set of
-cost and latency telemetry, calibration against labeled data, and the
-remaining evaluation test suite. The specs in `docs/specs/` describe the full
-intended product.
-
-## Layout
+## Architecture
 
 ```
 apps/
-	web/        React 19 + Vite candidate portal and employer workspace.
+	web/        React and Vite candidate portal, employer workspace, and guided demo.
 	gateway/    Public HTTP entry point and route dispatch.
-	identity/   Users, accounts, employer organizations, members, and join policies.
+	identity/   Users, authentication, organizations, members, and join policies.
 	hiring/     Jobs, requirements, candidate records, invitations, submissions, and review decisions.
-	documents/  Resume documents, immutable versions, storage metadata, and retention.
-	evaluation/ Independent and batch evaluations, evidence, embeddings, scores, and ranking.
+	documents/  Resume documents, immutable versions, private storage, and source deletion.
+	evaluation/ Independent and batch reports, evidence, embeddings, scores, and exports.
 	billing/    Point accounts, ledger, reservations, weekly allowance, Razorpay, and entitlements.
-	worker/     Parser and inference worker implementation selected by WORKER_ROLE.
-	migrate/    One-shot PostgreSQL schema migration command.
+	worker/     Parser and inference processes selected by WORKER_ROLE.
+	migrate/    One-shot PostgreSQL migrations.
+	edge/       Cloudflare Worker, Container controllers, static assets, and R2 object gateway.
+	supervisor/ Runs the gateway and domain services inside one Container.
 packages/
-	contracts/ Versioned route, event, and durable-job contracts shared across processes.
-	backend/   Reusable server-side packages shared by backend processes.
-	ui/        Shared UI component package used by web.
-docs/
-	specs/      Product behavior and service ownership.
-	research/   Provider constraints and architecture research.
+	contracts/  Shared route, event, and durable-job contracts.
+	backend/    Shared Go libraries.
+	ui/         Shared UI components.
 ```
 
-The gateway is the only public backend process. Domain processes reject routes they do not own. PostgreSQL keeps one physical cluster but separates authoritative tables into `identity`, `hiring`, `documents`, `evaluation`, `billing`, and `platform` schemas. Domain processes connect with only their own schema and the platform delivery schema in their search path.
+The gateway is the public backend entry point. Domain processes own authoritative tables in separate PostgreSQL schemas and authenticate their internal calls. `/healthz` checks the gateway process; `/readyz` checks every domain upstream.
 
-Parser and inference workers claim different durable job types. Parser workers receive no OpenRouter credential. Inference workers handle model extraction, embeddings, assessment, scoring, and corrected-resume rendering. The worker skill corpus is generated at `apps/worker/internal/vocab/skills_corpus.json`.
+PostgreSQL stores the durable queue. Parser and inference processes claim disjoint job types with `FOR UPDATE SKIP LOCKED`, commit a lease before slow work, renew it during processing, and fence result writes and point settlement against lease replacement. Hiring commits evaluation requests to an outbox with each accepted submission and retries delivery independently of the upload request.
 
-## Run with Docker
-
-Requires Docker and a `.env` file next to `docker-compose.yml` with:
-
-```
-POSTGRES_PASSWORD=change-me
-JWT_SECRET=some-secret-at-least-32-characters-long
-# optional, enables the model stages:
-OPENROUTER_API_KEY=sk-or-...
-# optional, enables Razorpay point packs and webhooks:
-RAZORPAY_KEY_ID=...
-RAZORPAY_KEY_SECRET=...
-# optional, enables admin endpoints (retention sweep, enterprise provisioning):
-ADMIN_TOKEN=some-admin-token
-```
-
-`.env.example` documents every variable with its default. Then:
-
-```sh
-docker compose up --build
-```
-
-Compose runs a one-shot migrator before the domain processes and workers start. The parser mounts source storage read-only. The inference worker mounts it read-write because corrected resumes are output artifacts. When startup finishes, the web client is at http://localhost:3000 and the gateway is at http://localhost:8000. `/healthz` checks the gateway process; `/readyz` checks every domain upstream.
+Parser workers have no model credential and read source storage. Inference workers extract facts, embed redacted evidence, assess criteria, calculate scores, render corrected resumes, and settle holds. Local deployments use a shared private volume. Production uses private R2 through the edge object gateway; parser workers hold a read-only credential. Workers must run continuously; a process that scales to zero does not consume this polling queue.
 
 ## Run locally
 
-The supported local workflow is `devenv up`. It provisions PostgreSQL, applies migrations, and starts the gateway, five domain processes, parser worker, inference worker, and Vite client.
+Use `bun` for the TypeScript workspaces. The supported local workflow is `devenv up`, which provisions PostgreSQL, migrates the database, and starts the gateway, five domain services, parser worker, inference worker, and web client.
 
-1. Create a database, then export connection settings:
-
-```sh
-export DATABASE_URL="postgresql://postgres:password@localhost:5432/skillsignal"
-export JWT_SECRET="some-secret-at-least-32-characters-long"
-export STORAGE_ROOT=".local-storage"
-export OPENROUTER_API_KEY="sk-or-..."   # optional
-```
-
-`.env.example` documents every variable with its default.
-
-2. Start the complete topology:
+Create a local `.env` with a valid `OPENROUTER_API_KEY` to run inference. `.env.example` documents model lists, storage, point economics, retention, and optional payment settings. The parser process intentionally receives no OpenRouter key.
 
 ```sh
 devenv up
 ```
 
-Sign up as an employer at `/sign-up` to reach the workspace, or as a
-candidate to run private checks.
+The web client runs at http://localhost:3000 and the gateway at http://localhost:8000. Sign up as either account type at `/sign-up`, or choose "See how it works" for the seeded demo.
 
-## Tests
+## Run with Docker Compose
 
-```sh
-CGO_ENABLED=0 go test ./packages/contracts/...
-CGO_ENABLED=0 go test ./packages/backend/...
-CGO_ENABLED=0 go test ./apps/migrate/...
-CGO_ENABLED=0 go test ./apps/gateway/...
-CGO_ENABLED=0 go test ./apps/worker/...
-CGO_ENABLED=0 go test ./apps/identity/... ./apps/hiring/... ./apps/documents/... ./apps/evaluation/... ./apps/billing/...
+Create `.env` next to `docker-compose.yml`:
+
+```dotenv
+POSTGRES_PASSWORD=change-me
+JWT_SECRET=some-secret-at-least-32-characters-long
+OPENROUTER_API_KEY=sk-or-...
+# Optional payments:
+RAZORPAY_KEY_ID=...
+RAZORPAY_KEY_SECRET=...
+RAZORPAY_WEBHOOK_SECRET=...
+# Optional manual retention and enterprise administration:
+ADMIN_TOKEN=some-admin-token
 ```
 
-Or run `go-test` inside the devenv shell. The web app has no unit tests yet; check it with `bun run typecheck` and `bun run lint`.
+```sh
+docker compose up --build
+```
 
-## Where to read more
+Compose applies migrations before starting the services. The parser mounts source storage read-only; inference mounts it read-write for corrected-resume artifacts. The development volume is not a production object store.
 
-`docs/specs/smart-resume-screener.md` is the product specification.
-`docs/specs/service-architecture.md` defines domain ownership, route routing, queue contracts, and database schemas.
-`docs/research/resume-screener-implementation.md` covers why the pipeline is
-shaped this way: parser choices, OpenRouter routing and privacy settings,
-scoring design, and the legal constraints around automated hiring tools.
+## Deploy to Cloudflare
+
+One `skillsignal` Worker serves the web client as static assets, routes `/api/*`, `/healthz`, and `/readyz` to a backend Container, and keeps separate parser and inference Containers running on a one-minute schedule. The backend Container runs the gateway and five domain services on loopback because Containers have no private network between them. The account needs Workers Paid, Containers, Durable Objects, and R2.
+
+Pull requests into protected `main` must pass `test-and-build` and `infrastructure`. Each push to `main` runs a `migrate` job, then a `deploy` job that starts only after every migration has committed. A failed migration leaves the running version in place; earlier migrations in that run stay applied, so keep them backward-compatible with the running release. The job then builds and deploys the Worker and image, and waits for `/readyz`.
+
+The `cloudflare-production` GitHub environment holds `CLOUDFLARE_API_TOKEN`, `DATABASE_URL`, `JWT_SECRET`, `OBJECT_STORAGE_TOKEN`, `OBJECT_STORAGE_READ_TOKEN`, and optional `OPENROUTER_API_KEY`, `RAZORPAY_*`, and `ADMIN_TOKEN` secrets, with `CLOUDFLARE_ACCOUNT_ID` and `PUBLIC_URL` variables. `DATABASE_URL` must be a direct PostgreSQL 18 connection with TLS. To use a custom domain, change `WEB_URL` and add a route in `apps/edge/wrangler.jsonc`, then update `PUBLIC_URL`.
+
+The inference Container does not start without `OPENROUTER_API_KEY`, so submitted resumes stay queued until it is set. Cloudflare limits request bodies by plan, to 100 MB on Free and Pro, which is below the application's 502 MiB batch upload limit.
+
+## Checks
+
+```sh
+devenv shell -- go-test
+devenv shell -- go-build
+devenv shell -- bun run typecheck
+devenv shell -- bun run build
+```
+
+Database workflow tests require explicit disposable targets. `TEST_DATABASE_URL` runs identity, hiring, documents, evaluation, and worker cases. Identity and hiring expect that target to be migrated; documents and evaluation create fresh databases and require database-creation permission. `BILLING_TEST_DATABASE_URL` and `SKILLSIGNAL_TEST_DATABASE_URL` enable billing and point-ledger concurrency cases respectively. Tests clean up their owned fixtures.
+
+`SERVICE_INTEGRATION=1` additionally enables `TestServiceContracts` in `apps/evaluation/internal/httpapi`, which starts the five real domain binaries against a fresh database and checks seeded demo consistency, ordinary upload delivery, idempotent retry, and coordinated retention. Worker HTTP fixtures verify evidence redaction, model fallback, scoring, stale leases, and settlement. They do not prove successful live provider inference. The web client currently has no unit-test suite; verify its workflows in a browser alongside typechecking and builds.
+
+## Documentation
+
+`docs/specs/smart-resume-screener.md` defines product behavior. `docs/specs/service-architecture.md` describes service ownership and delivery. `docs/specs/worker.md`, `billing.md`, `resume-ingestion.md`, `retention.md`, and `in-app-demo.md` describe their implemented flows and validation limits. The architecture research document referenced by the product specification is absent from this checkout. Local planning documents remain uncommitted.

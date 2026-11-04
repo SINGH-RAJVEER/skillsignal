@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/skillsignal/worker/internal/compiler"
+	"github.com/skillsignal/worker/internal/evaluator"
 	"github.com/skillsignal/worker/internal/vocab"
 )
 
@@ -27,6 +29,45 @@ func Report(normalizedFacts map[string]any, jobDescription string) (int, []map[s
 		suggestions = append(suggestions, RoleAlignmentSuggestions(jobDescription, skills)...)
 	}
 	return ReadinessScore(contact, skills, normalizedFacts), suggestions
+}
+
+// RoleReport evaluates job-specific typed criteria and returns evidence
+// separately from the general resume-quality score.
+func RoleReport(jobDescription string, facts map[string]any) (*int, int, []map[string]any, []map[string]any) {
+	if strings.TrimSpace(jobDescription) == "" {
+		return nil, 0, []map[string]any{}, []map[string]any{}
+	}
+	artifact := compiler.CompileJobDescription(jobDescription, nil, false, "")
+	requirements := make([]map[string]any, 0)
+	for _, entry := range artifact["requirements"].([]any) {
+		requirement := entry.(map[string]any)
+		requirement["id"] = requirement["stableId"]
+		requirement["kind"] = requirement["suggestedKind"]
+		requirement["weight"] = requirement["suggestedWeight"]
+		requirements = append(requirements, requirement)
+	}
+	if len(requirements) == 0 {
+		return nil, 0, requirements, []map[string]any{}
+	}
+	result := evaluator.Evaluate(facts, requirements)
+	return result.Score, result.EvidenceCoverage, requirements, AssessmentMaps(result.Assessments)
+}
+
+// AssessmentMaps gives private reports the same criterion outcomes as employer reports.
+func AssessmentMaps(items []evaluator.Assessment) []map[string]any {
+	assessments := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		evidence := make([]map[string]any, 0, len(item.Evidence))
+		for _, reference := range item.Evidence {
+			evidence = append(evidence, map[string]any{"blockId": reference.BlockID, "quote": reference.Quote})
+		}
+		assessments = append(assessments, map[string]any{
+			"requirementId": item.RequirementID, "outcome": item.Outcome,
+			"confidence": item.Confidence, "reasoning": item.Reasoning,
+			"evidence": evidence,
+		})
+	}
+	return assessments
 }
 
 // ReadinessSuggestions flags missing contact, skill, employment, and
@@ -87,31 +128,22 @@ func RoleAlignmentSuggestions(jobDescription string, skills map[string]struct{})
 	}}
 }
 
-// ReadinessScore weights contact, skill breadth, and history depth.
+// ReadinessScore uses documented skills and history without identity fields.
 func ReadinessScore(contact map[string]any, skills map[string]struct{}, facts map[string]any) int {
 	score := 20
-	if strOf(contact, "name") != "" {
-		score += 15
-	}
-	if strOf(contact, "email") != "" {
-		score += 15
-	}
-	if strOf(contact, "location") != "" {
-		score += 10
-	}
-	breadth := len(skills) * 5
-	if breadth > 25 {
-		breadth = 25
+	breadth := len(skills) * 10
+	if breadth > 50 {
+		breadth = 50
 	}
 	score += breadth
 	if len(entriesOf(facts["employment"])) > 0 {
-		score += 5
+		score += 15
 	}
 	if len(entriesOf(facts["education"])) > 0 {
-		score += 3
+		score += 10
 	}
 	if len(entriesOf(facts["certifications"])) > 0 {
-		score += 2
+		score += 5
 	}
 	if score > 100 {
 		score = 100

@@ -16,14 +16,14 @@ import (
 	"github.com/skillsignal/backend/config"
 	"github.com/skillsignal/backend/db"
 	"github.com/skillsignal/backend/httpx"
-	"github.com/skillsignal/contracts/routes"
 )
 
 type Definition struct {
-	Name           string                              `json:"name"`
-	Owns           []string                            `json:"owns"`
-	RouteGroups    []string                            `json:"routeGroups"`
-	RegisterRoutes func(*http.ServeMux, *pgxpool.Pool) `json:"-"`
+	Name           string                               `json:"name"`
+	Owns           []string                             `json:"owns"`
+	RouteGroups    []string                             `json:"routeGroups"`
+	RegisterRoutes func(*http.ServeMux, *pgxpool.Pool)  `json:"-"`
+	Start          func(context.Context, *pgxpool.Pool) `json:"-"`
 }
 
 func Run(definition Definition) {
@@ -58,13 +58,11 @@ func Run(definition Definition) {
 	if definition.RegisterRoutes != nil {
 		definition.RegisterRoutes(mux, pool)
 	}
+	if definition.Start != nil {
+		definition.Start(ctx, pool)
+	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		owner, ok := routes.ServiceFor(r.URL.Path)
-		if !ok || owner != definition.Name {
-			httpx.WriteError(w, http.StatusNotFound, httpx.CodeNotFound, "Route not found")
-			return
-		}
-		httpx.NotImplemented(w, definition.Name+" HTTP handlers are being ported to their owning module")
+		httpx.WriteError(w, http.StatusNotFound, httpx.CodeNotFound, "Route not found")
 	})
 
 	port := os.Getenv("PORT")

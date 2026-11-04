@@ -43,7 +43,7 @@ func Normalize(blocks []Block) (Facts, error) {
 		order[block.ID] = i
 	}
 	hits := make(map[string][]string)
-	for _, block := range blocks {
+	for _, block := range ScoringBlocks(blocks) {
 		for canonical := range v.Mention(block.Text) {
 			ids := hits[canonical]
 			duplicate := false
@@ -95,7 +95,12 @@ func ContactFacts(blocks []Block) map[string]*string {
 	}
 	var name *string
 	if len(lines) > 0 {
-		first := lines[0]
+		first := strings.TrimSpace(strings.SplitN(lines[0], "|", 2)[0])
+		for _, prefix := range []string{"name:", "full name:"} {
+			if strings.HasPrefix(strings.ToLower(first), prefix) {
+				first = strings.TrimSpace(first[len(prefix):])
+			}
+		}
 		words := strings.Fields(first)
 		allCapitalized := true
 		for _, word := range words {

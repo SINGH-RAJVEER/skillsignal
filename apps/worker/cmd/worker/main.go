@@ -31,12 +31,15 @@ func main() {
 		log.Fatalf("connect to database: %v", err)
 	}
 	defer pool.Close()
-	store, err := storage.New(settings.StorageRoot)
+	store, err := storage.Open(settings.StorageRoot, settings.ObjectStorageURL, settings.ObjectStorageToken)
 	if err != nil {
 		log.Fatalf("configure storage: %v", err)
 	}
 	if role == jobs.ParserRole && settings.LLMEnabled() {
 		log.Fatal("parser worker must not receive OPENROUTER_API_KEY")
+	}
+	if role == jobs.InferenceRole && !settings.LLMEnabled() {
+		log.Fatal("inference worker requires OPENROUTER_API_KEY")
 	}
 	log.Printf("SkillSignal %s worker starting (poll %.1fs, lease %ds, llm=%t)",
 		role, settings.WorkerPollIntervalSeconds, settings.WorkerLeaseSeconds, settings.LLMEnabled())

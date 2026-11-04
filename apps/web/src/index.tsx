@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import App from "./App";
 import { PageBackground } from "./components/PageBackground";
+import { DemoTourProvider } from "./features/tour/DemoTour";
 import { InvitationUpload } from "./pages/InvitationUpload";
 import { SignIn } from "./pages/SignIn";
 import { SignUp } from "./pages/SignUp";
@@ -16,13 +17,18 @@ if (!root) throw new Error("Root element not found");
 createRoot(root).render(
 	<StrictMode>
 		<BrowserRouter>
-			<PageBackground />
-			<Routes>
-				<Route path="/" element={<App />} />
-				<Route path="/sign-in" element={<SignIn />} />
-				<Route path="/sign-up" element={<SignUp />} />
-				<Route path="/apply/:token" element={<InvitationUpload />} />
-			</Routes>
+			<DemoTourProvider>
+				<PageBackground />
+				<Routes>
+					<Route path="/" element={<App />} />
+					<Route path="/sign-in" element={<SignIn />} />
+					<Route path="/sign-up" element={<SignUp />} />
+					<Route
+						path="/apply/:token"
+						element={<InvitationUpload />}
+					/>
+				</Routes>
+			</DemoTourProvider>
 		</BrowserRouter>
 	</StrictMode>,
 );

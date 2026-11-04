@@ -2,9 +2,12 @@ import { Button } from "@skillsignal/ui/components/button";
 import { Input } from "@skillsignal/ui/components/input";
 import { Label } from "@skillsignal/ui/components/label";
 import { CheckCircle2, KeyRound, UploadCloud } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { ThinkingOrb } from "thinking-orbs";
-import { candidateClient } from "./client";
+import {
+	candidateClient,
+	type SubmissionReceipt as ReceiptRecord,
+} from "./client";
 
 type RedeemedInvitation = {
 	jobId: string;
@@ -23,9 +26,31 @@ export const CandidateSubmissionWorkspace = () => {
 	);
 	const [resume, setResume] = useState<File | null>(null);
 	const [receipt, setReceipt] = useState<SubmissionReceipt | null>(null);
+	const [receipts, setReceipts] = useState<ReceiptRecord[]>([]);
+	const [isLoadingReceipts, setIsLoadingReceipts] = useState(true);
+	const [receiptError, setReceiptError] = useState<string | null>(null);
 	const [isRedeeming, setIsRedeeming] = useState(false);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const loadReceipts = useCallback(async () => {
+		setReceiptError(null);
+		setIsLoadingReceipts(true);
+		try {
+			setReceipts(await candidateClient.submissionReceipts());
+		} catch (reason) {
+			setReceiptError(
+				reason instanceof Error
+					? reason.message
+					: "Submission receipts could not be loaded.",
+			);
+		} finally {
+			setIsLoadingReceipts(false);
+		}
+	}, []);
+
+	useEffect(() => {
+		void loadReceipts();
+	}, [loadReceipts]);
 
 	const redeem = async (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
@@ -60,8 +85,9 @@ export const CandidateSubmissionWorkspace = () => {
 			);
 			setReceipt({
 				submissionId: result.submissionId,
-				receivedAt: new Date(),
+				receivedAt: new Date(result.receivedAt),
 			});
+			void loadReceipts();
 			setResume(null);
 		} catch (reason) {
 			setError(
@@ -209,6 +235,52 @@ export const CandidateSubmissionWorkspace = () => {
 					{error}
 				</p>
 			)}
+			<section
+				aria-labelledby="submission-receipts-title"
+				className="submission-receipts"
+				data-tour={isLoadingReceipts ? undefined : "candidate-receipts"}
+			>
+				<header>
+					<p className="eyebrow">Submission history</p>
+					<h2 id="submission-receipts-title">Your receipts</h2>
+					<p>
+						Receipts confirm delivery only. They do not include an
+						employer’s evaluation or decision.
+					</p>
+				</header>
+				{isLoadingReceipts ? (
+					<p className="candidate-empty" role="status">
+						Loading your submission receipts...
+					</p>
+				) : receiptError ? (
+					<p className="form-error" role="alert">
+						{receiptError}
+					</p>
+				) : receipts.length ? (
+					<ul className="candidate-history-list">
+						{receipts.map((item) => (
+							<li key={item.submissionId}>
+								<div>
+									<span className="history-name">
+										{item.jobTitle}
+									</span>
+									<span className="history-meta">
+										Received{" "}
+										{new Date(
+											item.receivedAt,
+										).toLocaleString()}
+									</span>
+								</div>
+								<code>{item.submissionId}</code>
+							</li>
+						))}
+					</ul>
+				) : (
+					<p className="candidate-empty">
+						Your submitted applications will appear here.
+					</p>
+				)}
+			</section>
 		</section>
 	);
 };
