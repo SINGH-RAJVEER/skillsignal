@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -38,7 +39,14 @@ func ConnectFor(ctx context.Context, databaseURL string, schemas ...string) (*pg
 	if err != nil {
 		return nil, err
 	}
-	config.ConnConfig.RuntimeParams["search_path"] = SchemaSearchPath(schemas...)
+	searchPath := SchemaSearchPath(schemas...)
+	// Neon's proxy drops search_path from startup parameters, so set it on the
+	// session. This requires a direct connection; a transaction pooler would not
+	// keep the setting on one server connection.
+	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, "SET search_path TO "+searchPath)
+		return err
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, err
@@ -50,7 +58,7 @@ func ConnectFor(ctx context.Context, databaseURL string, schemas ...string) (*pg
 	return pool, nil
 }
 
-// SchemaSearchPath quotes schema identifiers before they enter a connection parameter.
+// SchemaSearchPath quotes schema identifiers for a search_path setting.
 func SchemaSearchPath(schemas ...string) string {
 	quoted := make([]string, 0, len(schemas))
 	for _, schema := range schemas {
