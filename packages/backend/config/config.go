@@ -56,6 +56,7 @@ type Settings struct {
 	Billing                       BillingSettings
 	WorkerPollIntervalSeconds     float64
 	WorkerLeaseSeconds            int
+	WorkerIdleExitSeconds         int
 	ParseTimeoutSeconds           float64
 	OpenRouter                    OpenRouterSettings
 }
@@ -202,6 +203,13 @@ func Load() (Settings, error) {
 		return Settings{}, err
 	}
 	settings.WorkerLeaseSeconds = leaseSeconds
+	settings.WorkerIdleExitSeconds, err = intOr("WORKER_IDLE_EXIT_SECONDS", "0")
+	if err != nil {
+		return Settings{}, err
+	}
+	if settings.WorkerIdleExitSeconds < 0 {
+		return Settings{}, errors.New("WORKER_IDLE_EXIT_SECONDS must not be negative")
+	}
 	settings.ParseTimeoutSeconds, err = floatOr("PARSE_TIMEOUT_SECONDS", "30")
 	if err != nil {
 		return Settings{}, err

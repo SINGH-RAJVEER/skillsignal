@@ -82,7 +82,7 @@ Compose applies migrations before starting the services. The parser mounts sourc
 
 ## Deploy to Cloudflare
 
-One `skillsignal` Worker serves the web client as static assets, routes `/api/*`, `/healthz`, and `/readyz` to a backend Container, and keeps separate parser and inference Containers running on a one-minute schedule. The backend Container runs the gateway and five domain services on loopback because Containers have no private network between them. The account needs Workers Paid, Containers, Durable Objects, and R2.
+One `skillsignal` Worker serves the web client as static assets, routes `/api/*`, `/healthz`, and `/readyz` to a backend Container, and starts separate parser and inference Containers on demand. All three use `lite` instances; the backend sleeps after five idle minutes and the workers exit once the processing pipeline is idle. The backend Container runs the gateway and five domain services on loopback because Containers have no private network between them. The account needs Workers Paid, Containers, Durable Objects, and R2.
 
 Pull requests into protected `main` must pass `test-and-build` and `infrastructure`. Each push to `main` runs a `migrate` job, then a `deploy` job that starts only after every migration has committed. A failed migration leaves the running version in place; earlier migrations in that run stay applied, so keep them backward-compatible with the running release. The job then builds and deploys the Worker and image, and waits for `/readyz`.
 

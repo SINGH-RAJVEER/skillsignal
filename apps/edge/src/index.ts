@@ -19,7 +19,17 @@ interface Env {
 	ADMIN_TOKEN?: string;
 }
 
-const INACTIVITY_MS = 5 * 60 * 1000;
+// Requests renew the backend timeout. Workers stop themselves after
+// WORKER_IDLE_EXIT_SECONDS, so their longer timeout is only a backstop that the
+// renewal cron extends while they run.
+const BACKEND_INACTIVITY_MS = 5 * 60 * 1000;
+const WORKER_INACTIVITY_MS = 15 * 60 * 1000;
+const WORKER_IDLE_EXIT_SECONDS = "300";
+// A wake that lands just as a worker exits sees it running and does nothing,
+// so an exit this soon after a wake restarts the Container.
+const REWAKE_MS = 60_000;
+const RENEW_CRON = "*/5 * * * *";
+const MAINTENANCE_CRON = "0 */6 * * *";
 const BACKEND_PORT = 8000;
 const DRAIN_MS = 60_000;
 
@@ -36,18 +46,19 @@ function present(
 abstract class ProcessContainer extends DurableObject<Env> {
 	private starting: Promise<void> | undefined;
 	private monitoring: Promise<void> | undefined;
+	private wokenAt = 0;
 
 	protected abstract readonly name: string;
-	protected abstract readonly instance: "basic" | "standard-1";
 	protected abstract readonly entrypoint: string[] | undefined;
 	protected abstract environment(): Record<string, string>;
 	protected async waitUntilReady(): Promise<void> {}
+	protected started(): void {}
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		if (ctx.container?.running) {
 			void ctx.blockConcurrencyWhile(() =>
-				this.container.setInactivityTimeout(INACTIVITY_MS),
+				this.container.setInactivityTimeout(this.inactivityMs),
 			);
 			this.observeExit();
 		}
@@ -59,7 +70,23 @@ abstract class ProcessContainer extends DurableObject<Env> {
 		return container;
 	}
 
+	// A getter, so the base constructor already sees a subclass override.
+	protected get inactivityMs(): number {
+		return BACKEND_INACTIVITY_MS;
+	}
+
 	async ensureRunning(): Promise<void> {
+		this.wokenAt = Date.now();
+		return this.run();
+	}
+
+	// Renews a running Container without starting a stopped one.
+	async renew(): Promise<void> {
+		if (this.ctx.container?.running)
+			await this.ctx.container.setInactivityTimeout(this.inactivityMs);
+	}
+
+	private run(): Promise<void> {
 		this.starting ??= this.startAndWait().finally(() => {
 			this.starting = undefined;
 		});
@@ -85,15 +112,16 @@ abstract class ProcessContainer extends DurableObject<Env> {
 		if (!container.running) {
 			container.start({
 				image,
-				instance: this.instance,
+				instance: "lite",
 				enableInternet: true,
 				entrypoint: this.entrypoint,
 				env: this.environment(),
 			});
 			await this.ctx.storage.put("release", this.env.VERSION.id);
+			this.started();
 		}
 		this.observeExit();
-		await container.setInactivityTimeout(INACTIVITY_MS);
+		await container.setInactivityTimeout(this.inactivityMs);
 		await this.waitUntilReady();
 	}
 
@@ -106,6 +134,14 @@ abstract class ProcessContainer extends DurableObject<Env> {
 			)
 			.finally(() => {
 				this.monitoring = undefined;
+				if (!this.starting && Date.now() - this.wokenAt < REWAKE_MS)
+					this.ctx.waitUntil(
+						this.run().catch(() =>
+							console.error(
+								`${this.name} container restart failed`,
+							),
+						),
+					);
 			});
 		this.ctx.waitUntil(this.monitoring);
 	}
@@ -117,7 +153,6 @@ abstract class ProcessContainer extends DurableObject<Env> {
 
 export class BackendContainer extends ProcessContainer {
 	protected readonly name = "backend";
-	protected readonly instance = "standard-1" as const;
 	protected readonly entrypoint = undefined;
 
 	protected environment(): Record<string, string> {
@@ -132,6 +167,13 @@ export class BackendContainer extends ProcessContainer {
 			RAZORPAY_WEBHOOK_SECRET: this.env.RAZORPAY_WEBHOOK_SECRET,
 			ADMIN_TOKEN: this.env.ADMIN_TOKEN,
 		});
+	}
+
+	// The outbox dispatcher can queue processing jobs after any start, including
+	// starts from reads, deploy checks, and the maintenance cron.
+	protected override started(): void {
+		for (const worker of workers(this.env))
+			this.ctx.waitUntil(wake(worker));
 	}
 
 	protected override async waitUntilReady(): Promise<void> {
@@ -163,16 +205,22 @@ export class BackendContainer extends ProcessContainer {
 	}
 }
 
+abstract class WorkerContainer extends ProcessContainer {
+	protected override get inactivityMs(): number {
+		return WORKER_INACTIVITY_MS;
+	}
+}
+
 // Parsing handles untrusted files, so it runs apart from the model credential
 // and with a token that cannot change stored objects.
-export class ParserContainer extends ProcessContainer {
+export class ParserContainer extends WorkerContainer {
 	protected readonly name = "parser";
-	protected readonly instance = "basic" as const;
 	protected readonly entrypoint = ["/app/worker"];
 
 	protected environment(): Record<string, string> {
 		return {
 			WORKER_ROLE: "parser",
+			WORKER_IDLE_EXIT_SECONDS,
 			DATABASE_URL: this.env.DATABASE_URL,
 			JWT_SECRET: this.env.JWT_SECRET,
 			OBJECT_STORAGE_URL: this.storageURL(),
@@ -181,9 +229,8 @@ export class ParserContainer extends ProcessContainer {
 	}
 }
 
-export class InferenceContainer extends ProcessContainer {
+export class InferenceContainer extends WorkerContainer {
 	protected readonly name = "inference";
-	protected readonly instance = "basic" as const;
 	protected readonly entrypoint = ["/app/worker"];
 
 	protected environment(): Record<string, string> {
@@ -191,6 +238,7 @@ export class InferenceContainer extends ProcessContainer {
 			throw new Error("OPENROUTER_API_KEY is not configured");
 		return {
 			WORKER_ROLE: "inference",
+			WORKER_IDLE_EXIT_SECONDS,
 			DATABASE_URL: this.env.DATABASE_URL,
 			JWT_SECRET: this.env.JWT_SECRET,
 			OPENROUTER_API_KEY: this.env.OPENROUTER_API_KEY,
@@ -200,13 +248,34 @@ export class InferenceContainer extends ProcessContainer {
 	}
 }
 
+function workers(env: Env) {
+	return [
+		env.PARSER.getByName("parser"),
+		env.INFERENCE.getByName("inference"),
+	];
+}
+
+function wake(worker: ReturnType<typeof workers>[number]): Promise<void> {
+	return worker
+		.ensureRunning()
+		.catch((error) => console.error("Worker start failed", error));
+}
+
 export default {
-	async fetch(request: Request, env: Env): Promise<Response> {
+	async fetch(
+		request: Request,
+		env: Env,
+		ctx: ExecutionContext,
+	): Promise<Response> {
 		if (new URL(request.url).pathname.startsWith(PREFIX)) {
 			return storage(request, env.OBJECTS, {
 				readWrite: env.OBJECT_STORAGE_TOKEN,
 				readOnly: env.OBJECT_STORAGE_READ_TOKEN,
 			});
+		}
+		// Writes may queue processing jobs, so they start the workers ahead of them.
+		if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+			for (const worker of workers(env)) ctx.waitUntil(wake(worker));
 		}
 		try {
 			return await env.BACKEND.getByName("backend").fetch(request);
@@ -223,20 +292,27 @@ export default {
 			);
 		}
 	},
-	async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-		// Start every role even when one fails, then fail the run so it is visible.
-		const results = await Promise.allSettled([
-			env.BACKEND.getByName("backend").ensureRunning(),
-			env.PARSER.getByName("parser").ensureRunning(),
-			env.INFERENCE.getByName("inference").ensureRunning(),
-		]);
+	async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+		// PostgreSQL polling does not renew the Container inactivity timeout, so
+		// running workers are renewed. The backend sweeps retention on start.
+		const runs =
+			controller.cron === MAINTENANCE_CRON
+				? [env.BACKEND.getByName("backend").ensureRunning()]
+				: controller.cron === RENEW_CRON
+					? [
+							env.PARSER.getByName("parser").renew(),
+							env.INFERENCE.getByName("inference").renew(),
+						]
+					: [];
+		// Run every call even when one fails, then fail the run so it is visible.
+		const results = await Promise.allSettled(runs);
 		const failures = results.filter(
 			(result) => result.status === "rejected",
 		);
 		if (failures.length > 0) {
 			throw new AggregateError(
 				failures.map((failure) => failure.reason),
-				"Container keep-alive failed",
+				"Scheduled Container call failed",
 			);
 		}
 	},

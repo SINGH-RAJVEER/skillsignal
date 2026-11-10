@@ -7,9 +7,9 @@
 	"preview_urls": false,
 	"observability": { "enabled": true },
 	"version_metadata": { "binding": "VERSION" },
-	// The Containers ignore inactivity while they poll PostgreSQL, so each minute
-	// renews their timeout and restarts any that exited.
-	"triggers": { "crons": ["* * * * *"] },
+	// Containers start on demand. Every five minutes renews workers that are
+	// still running; every six hours starts the backend for its retention sweep.
+	"triggers": { "crons": ["*/5 * * * *", "0 */6 * * *"] },
 	"vars": {
 		"WEB_URL": "https://skillsignal.therajveersingh.workers.dev"
 	},

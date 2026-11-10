@@ -84,12 +84,23 @@ func New(pool *pgxpool.Pool, settings config.Settings, store storage.Store, role
 	}
 }
 
-// Run polls until the context ends.
+// Run polls until the context ends or, when WorkerIdleExitSeconds is set, until
+// the pipeline has been idle that long.
 func (w *Worker) Run(ctx context.Context) {
+	idleExit := time.Duration(w.settings.WorkerIdleExitSeconds) * time.Second
+	lastActive := time.Now()
 	for {
 		worked, err := w.RunOnce(ctx)
 		if err != nil {
 			log.Printf("worker iteration error: %v", err)
+		}
+		if worked || idleExit == 0 {
+			lastActive = time.Now()
+		} else if active, err := w.pipelineActive(ctx); err != nil || active {
+			lastActive = time.Now()
+		} else if time.Since(lastActive) >= idleExit {
+			log.Printf("pipeline idle for %s; worker exiting", idleExit)
+			return
 		}
 		if !worked {
 			select {
@@ -102,6 +113,15 @@ func (w *Worker) Run(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// pipelineActive reports work for any role, so one role does not stop while
+// another can still queue a follow-up for it. Retry backoff is capped near five
+// minutes, so ready jobs count whenever they become available.
+func (w *Worker) pipelineActive(ctx context.Context) (bool, error) {
+	var active bool
+	err := w.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM processing_job WHERE status IN ('ready', 'processing'))`).Scan(&active)
+	return active, err
 }
 
 // RunOnce claims and processes a single job.
