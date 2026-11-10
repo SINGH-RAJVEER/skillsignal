@@ -52,6 +52,7 @@ abstract class ProcessContainer extends DurableObject<Env> {
 	protected abstract readonly entrypoint: string[] | undefined;
 	protected abstract environment(): Record<string, string>;
 	protected async waitUntilReady(): Promise<void> {}
+	protected started(): void {}
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -117,6 +118,7 @@ abstract class ProcessContainer extends DurableObject<Env> {
 				env: this.environment(),
 			});
 			await this.ctx.storage.put("release", this.env.VERSION.id);
+			this.started();
 		}
 		this.observeExit();
 		await container.setInactivityTimeout(this.inactivityMs);
@@ -165,6 +167,13 @@ export class BackendContainer extends ProcessContainer {
 			RAZORPAY_WEBHOOK_SECRET: this.env.RAZORPAY_WEBHOOK_SECRET,
 			ADMIN_TOKEN: this.env.ADMIN_TOKEN,
 		});
+	}
+
+	// The outbox dispatcher can queue processing jobs after any start, including
+	// starts from reads, deploy checks, and the maintenance cron.
+	protected override started(): void {
+		for (const worker of workers(this.env))
+			this.ctx.waitUntil(wake(worker));
 	}
 
 	protected override async waitUntilReady(): Promise<void> {
@@ -239,6 +248,19 @@ export class InferenceContainer extends WorkerContainer {
 	}
 }
 
+function workers(env: Env) {
+	return [
+		env.PARSER.getByName("parser"),
+		env.INFERENCE.getByName("inference"),
+	];
+}
+
+function wake(worker: ReturnType<typeof workers>[number]): Promise<void> {
+	return worker
+		.ensureRunning()
+		.catch((error) => console.error("Worker start failed", error));
+}
+
 export default {
 	async fetch(
 		request: Request,
@@ -253,17 +275,7 @@ export default {
 		}
 		// Writes may queue processing jobs, so they start the workers ahead of them.
 		if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
-			for (const worker of [
-				env.PARSER.getByName("parser"),
-				env.INFERENCE.getByName("inference"),
-			])
-				ctx.waitUntil(
-					worker
-						.ensureRunning()
-						.catch((error) =>
-							console.error("Worker start failed", error),
-						),
-				);
+			for (const worker of workers(env)) ctx.waitUntil(wake(worker));
 		}
 		try {
 			return await env.BACKEND.getByName("backend").fetch(request);
