@@ -36,6 +36,12 @@ class FakeContainer {
 			this.exit = resolve;
 		});
 	}
+	signal() {
+		this.stop();
+	}
+	async destroy() {
+		this.stop();
+	}
 	async setInactivityTimeout(ms: number) {
 		this.timeout = ms;
 	}
@@ -103,6 +109,17 @@ test("renew leaves a stopped worker stopped", async () => {
 	const container = new FakeContainer();
 	await create(InferenceContainer, container).renew();
 	expect(container.starts).toBe(0);
+});
+
+test("renew replaces a worker from an earlier release", async () => {
+	const container = new FakeContainer();
+	container.running = true;
+	const parser = create(ParserContainer, container);
+	await parser.renew();
+	expect(container.starts).toBe(1);
+
+	await parser.renew();
+	expect(container.starts).toBe(1);
 });
 
 test("a worker that exits right after a wake restarts once", async () => {
