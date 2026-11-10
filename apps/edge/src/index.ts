@@ -38,7 +38,6 @@ abstract class ProcessContainer extends DurableObject<Env> {
 	private monitoring: Promise<void> | undefined;
 
 	protected abstract readonly name: string;
-	protected abstract readonly instance: "basic" | "standard-1";
 	protected abstract readonly entrypoint: string[] | undefined;
 	protected abstract environment(): Record<string, string>;
 	protected async waitUntilReady(): Promise<void> {}
@@ -85,7 +84,7 @@ abstract class ProcessContainer extends DurableObject<Env> {
 		if (!container.running) {
 			container.start({
 				image,
-				instance: this.instance,
+				instance: "lite",
 				enableInternet: true,
 				entrypoint: this.entrypoint,
 				env: this.environment(),
@@ -117,7 +116,6 @@ abstract class ProcessContainer extends DurableObject<Env> {
 
 export class BackendContainer extends ProcessContainer {
 	protected readonly name = "backend";
-	protected readonly instance = "standard-1" as const;
 	protected readonly entrypoint = undefined;
 
 	protected environment(): Record<string, string> {
@@ -167,7 +165,6 @@ export class BackendContainer extends ProcessContainer {
 // and with a token that cannot change stored objects.
 export class ParserContainer extends ProcessContainer {
 	protected readonly name = "parser";
-	protected readonly instance = "basic" as const;
 	protected readonly entrypoint = ["/app/worker"];
 
 	protected environment(): Record<string, string> {
@@ -183,7 +180,6 @@ export class ParserContainer extends ProcessContainer {
 
 export class InferenceContainer extends ProcessContainer {
 	protected readonly name = "inference";
-	protected readonly instance = "basic" as const;
 	protected readonly entrypoint = ["/app/worker"];
 
 	protected environment(): Record<string, string> {
