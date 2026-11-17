@@ -100,7 +100,7 @@ func (s *Server) createJobForm(w http.ResponseWriter, r *http.Request) {
 func (s *Server) jobDetail(w http.ResponseWriter, r *http.Request, id, org string) {
 	var raw []byte
 	err := s.pool.QueryRow(r.Context(), `SELECT jsonb_build_object('id',j.id,'organizationId',j.organization_id,'title',j.title,'applicationOpensAt',j.application_opens_at,'applicationClosesAt',j.application_closes_at,'versionId',v.id,'version',v.version,'description',v.source_text,'confirmed',v.confirmed_at IS NOT NULL,
-	'draftStatus',CASE WHEN v.draft_requirements IS NOT NULL THEN 'ready' WHEN EXISTS(SELECT 1 FROM processing_job p WHERE p.payload_reference=v.id AND p.status='dead') THEN 'failed' ELSE 'processing' END,
+	'draftStatus',CASE WHEN v.draft_requirements IS NOT NULL OR v.confirmed_at IS NOT NULL THEN 'ready' WHEN EXISTS(SELECT 1 FROM processing_job p WHERE p.payload_reference=v.id AND p.status='dead') THEN 'failed' ELSE 'processing' END,
 	'draftError',(SELECT p.safe_error FROM processing_job p WHERE p.payload_reference=v.id AND p.status='dead' ORDER BY p.created_at DESC LIMIT 1),
 	'draftQualityState',v.draft_requirements->'qualityState','draftWarnings',COALESCE(v.draft_requirements->'warnings','[]'::jsonb),'draftDegraded',COALESCE((v.draft_requirements->>'degraded')::boolean,false),
 	'draftRequirements',COALESCE(v.draft_requirements->'requirements','[]'::jsonb),
