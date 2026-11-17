@@ -1,14 +1,6 @@
 import { Button } from "@skillsignal/ui/components/button";
 import { Input } from "@skillsignal/ui/components/input";
-import {
-	Briefcase,
-	ChevronRight,
-	Copy,
-	Link as LinkIcon,
-	Plus,
-	UploadCloud,
-	X,
-} from "lucide-react";
+import { ArrowLeft, Briefcase, Plus, UploadCloud, X } from "lucide-react";
 import {
 	type FormEvent,
 	useCallback,
@@ -30,7 +22,6 @@ import {
 	workspaceClient,
 } from "./client";
 import { CriteriaTab } from "./criteria-tab";
-import { EvidenceDrawer } from "./evidence-drawer";
 import { ExportDialog } from "./export-dialog";
 import {
 	ApplicationWindowDialog,
@@ -39,13 +30,14 @@ import {
 } from "./job-dialogs";
 import { MembersDialog } from "./members-dialog";
 import { ResultsTab } from "./results-tab";
+import { ShareMenu } from "./share-menu";
 import {
 	applicationStatus,
 	draftsToRequirements,
 	type EligibilityFilter,
 	type Invitation,
 	type OutcomeFilter,
-	overlayBackdrop,
+	parseEligibilityFilter,
 	type StatusFilter,
 	type TabName,
 } from "./shared";
@@ -63,8 +55,9 @@ export const Workspace = () => {
 	const [selectedJob, setSelectedJob] = useState<JobDetail | null>(null);
 	const [activeTab, setActiveTab] = useState<TabName>("results");
 	const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
-	const [inspectingEvaluation, setInspectingEvaluation] =
-		useState<Evaluation | null>(null);
+	const [selectedEvaluationId, setSelectedEvaluationId] = useState<
+		string | null
+	>(null);
 	const [isCreateOrgOpen, setIsCreateOrgOpen] = useState(false);
 	const [isCreateJobOpen, setIsCreateJobOpen] = useState(false);
 	const [requirements, setRequirements] = useState<Requirement[]>([]);
@@ -75,6 +68,7 @@ export const Workspace = () => {
 	const [invitation, setInvitation] = useState<Invitation | null>(null);
 	const [inviteHours, setInviteHours] = useState(168);
 	const [copiedInvitation, setCopiedInvitation] = useState(false);
+	const [isCreatingInvitation, setIsCreatingInvitation] = useState(false);
 	const [isWindowOpen, setIsWindowOpen] = useState(false);
 	const [isMembersOpen, setIsMembersOpen] = useState(false);
 	const [evaluationQuery, setEvaluationQuery] = useState(
@@ -82,7 +76,7 @@ export const Workspace = () => {
 	);
 	const [eligibilityFilter, setEligibilityFilter] =
 		useState<EligibilityFilter>(
-			(searchParams.get("eligibility") as EligibilityFilter) ?? "top",
+			parseEligibilityFilter(searchParams.get("eligibility")),
 		);
 	const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>(
 		(searchParams.get("outcome") as OutcomeFilter) ?? "all",
@@ -97,6 +91,9 @@ export const Workspace = () => {
 		searchParams.get("minimum_score") ?? "",
 	);
 	const [allEvaluations, setAllEvaluations] = useState<Evaluation[]>([]);
+	const [evaluationsJobId, setEvaluationsJobId] = useState<string | null>(
+		null,
+	);
 	const [isExportOpen, setIsExportOpen] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -104,8 +101,7 @@ export const Workspace = () => {
 	const [isUploading, setIsUploading] = useState(false);
 	const evaluationFilters = useMemo(() => {
 		const filters: EvaluationFilters = {};
-		if (eligibilityFilter === "top") filters.eligibility = ["eligible"];
-		else if (eligibilityFilter !== "all")
+		if (eligibilityFilter !== "all")
 			filters.eligibility = [eligibilityFilter];
 		if (outcomeFilter !== "all") filters.outcome = [outcomeFilter];
 		if (statusFilter !== "all") filters.status = [statusFilter];
@@ -140,8 +136,7 @@ export const Workspace = () => {
 			skill: skillFilter,
 			minimum_score: minimumScoreText,
 		})) {
-			if (value && value !== "all" && value !== "top")
-				next.set(key, value);
+			if (value && value !== "all") next.set(key, value);
 			else next.delete(key);
 		}
 		if (next.toString() !== searchParams.toString())
@@ -168,7 +163,6 @@ export const Workspace = () => {
 		setIsWindowOpen(false);
 		setIsMembersOpen(false);
 		setIsExportOpen(false);
-		setInspectingEvaluation(null);
 	}, []);
 
 	const refreshEvaluations = useCallback(
@@ -179,6 +173,7 @@ export const Workspace = () => {
 			]);
 			setEvaluations(results);
 			setAllEvaluations(everything);
+			setEvaluationsJobId(jobId);
 		},
 		[evaluationFilters],
 	);
@@ -188,7 +183,8 @@ export const Workspace = () => {
 			try {
 				const detail = await workspaceClient.job(job.id);
 				setSelectedJob(detail);
-				setInspectingEvaluation(null);
+				setSelectedEvaluationId(null);
+				setInvitation(null);
 				setRequirements(
 					detail.requirements.length
 						? detail.requirements.map((requirement) => ({
@@ -220,7 +216,7 @@ export const Workspace = () => {
 		if (!organizationId) return;
 		setInvitation(null);
 		setSelectedJob(null);
-		setInspectingEvaluation(null);
+		setSelectedEvaluationId(null);
 		void workspaceClient
 			.jobs(organizationId)
 			.then(async (list) => {
@@ -286,11 +282,7 @@ export const Workspace = () => {
 	}, [selectedJobId, hasPendingEvaluations, refreshEvaluations]);
 
 	const overlayOpen =
-		isCreateOrgOpen ||
-		isCreateJobOpen ||
-		isWindowOpen ||
-		isMembersOpen ||
-		inspectingEvaluation !== null;
+		isCreateOrgOpen || isCreateJobOpen || isWindowOpen || isMembersOpen;
 
 	useEffect(() => {
 		if (!overlayOpen) return;
@@ -311,10 +303,9 @@ export const Workspace = () => {
 			evaluations.find(
 				(evaluation) => evaluation.eligibility === "eligible",
 			) ?? evaluations[0];
-		if (example) setInspectingEvaluation(example);
+		if (example) setSelectedEvaluationId(example.id);
 	}, [evaluations]);
 	const showDemoExport = useCallback(() => {
-		setInspectingEvaluation(null);
 		setActiveTab("results");
 		setIsExportOpen(true);
 	}, []);
@@ -436,7 +427,8 @@ export const Workspace = () => {
 	};
 
 	const handleCreateInvitation = async () => {
-		if (!selectedJob) return;
+		if (!selectedJob || isCreatingInvitation) return;
+		setIsCreatingInvitation(true);
 		try {
 			const created = await workspaceClient.createInvitation(
 				selectedJob.id,
@@ -447,11 +439,10 @@ export const Workspace = () => {
 				passcode: created.passcode,
 				expiresAt: created.expiresAt,
 			});
-			setNotice(
-				"Single-use invitation created. Share the link or the passcode.",
-			);
 		} catch (reason) {
 			reportError(reason);
+		} finally {
+			setIsCreatingInvitation(false);
 		}
 	};
 
@@ -471,6 +462,13 @@ export const Workspace = () => {
 			.includes(query);
 	});
 
+	const selectedEvaluation =
+		visibleEvaluations.find(
+			(evaluation) => evaluation.id === selectedEvaluationId,
+		) ??
+		visibleEvaluations[0] ??
+		null;
+
 	const filteredJobs = jobs.filter((job) =>
 		job.title.toLowerCase().includes(jobSearch.toLowerCase()),
 	);
@@ -486,10 +484,14 @@ export const Workspace = () => {
 						<img src="/icon.webp" alt="SkillSignal" />
 					</a>
 					{organization && (
-						<div className="workspace-org">
-							<span>Organization</span>
-							<strong>{organization.name}</strong>
-						</div>
+						<>
+							<span aria-hidden className="workspace-org-divider">
+								/
+							</span>
+							<strong className="workspace-org">
+								{organization.name}
+							</strong>
+						</>
 					)}
 				</div>
 				<div className="workspace-header-right">
@@ -497,11 +499,13 @@ export const Workspace = () => {
 						disabled={!organizationId}
 						onClick={() => setIsMembersOpen(true)}
 						size="sm"
-						variant="outline"
+						variant="ghost"
 					>
 						Members
 					</Button>
-					<span>{session.user.name || session.user.email}</span>
+					<span className="workspace-user">
+						{session.user.name || session.user.email}
+					</span>
 					<Button
 						onClick={() => authClient.signOut()}
 						size="sm"
@@ -543,47 +547,49 @@ export const Workspace = () => {
 				<aside className="workspace-aside" data-tour="employer-role">
 					<div className="workspace-aside-head">
 						<h2>Roles</h2>
-						<Button onClick={startCreateJob} size="sm">
+						<Button
+							onClick={startCreateJob}
+							size="sm"
+							variant="outline"
+						>
 							<Plus />
-							New role
+							New
 						</Button>
 					</div>
-					<div>
-						<Input
-							aria-label="Search roles"
-							onChange={(event) =>
-								setJobSearch(event.target.value)
-							}
-							placeholder="Search roles..."
-							value={jobSearch}
-						/>
-					</div>
+					<Input
+						aria-label="Search roles"
+						onChange={(event) => setJobSearch(event.target.value)}
+						placeholder="Search roles"
+						value={jobSearch}
+					/>
 					<nav aria-label="Roles" className="role-list">
 						{filteredJobs.map((job) => (
 							<button
+								aria-current={
+									selectedJob?.id === job.id
+										? "page"
+										: undefined
+								}
+								className="role-item"
 								key={job.id}
-								className={`role-item${
-									selectedJob?.id === job.id ? " active" : ""
-								}`}
 								onClick={() => void openJob(job)}
 								type="button"
 							>
-								<span>
-									<span className="role-item-name">
-										{job.title}
-									</span>
-									<span className="role-item-meta">
-										{job.confirmed
-											? "confirmed"
-											: "draft criteria"}
-									</span>
+								<span className="role-item-name">
+									{job.title}
 								</span>
-								<ChevronRight aria-hidden />
+								<span className="role-item-meta">
+									{job.confirmed
+										? "Requirements confirmed"
+										: "Draft criteria"}
+								</span>
 							</button>
 						))}
-						{filteredJobs.length === 0 && (
+						{jobsLoaded && filteredJobs.length === 0 && (
 							<p className="muted-copy">
-								No roles yet. Create one to start screening.
+								{jobs.length === 0
+									? "No roles yet. Create one to start screening."
+									: "No roles match this search."}
 							</p>
 						)}
 					</nav>
@@ -594,173 +600,133 @@ export const Workspace = () => {
 						<div className="workspace-stage">
 							<div className="job-head" data-tour="employer-job">
 								<div>
-									<div className="job-title-row">
-										<h1>{selectedJob.title}</h1>
-										<span
-											className={
-												selectedJob.confirmed
-													? "status-chip chip-solid"
-													: "status-chip chip-outline"
-											}
-										>
-											{selectedJob.confirmed
-												? "requirements confirmed"
-												: "needs confirmation"}
-										</span>
-										<span
-											className={
-												applicationStatus(selectedJob)
-													.className
-											}
-										>
-											{
-												applicationStatus(selectedJob)
-													.label
-											}
-										</span>
-									</div>
+									<h1>{selectedJob.title}</h1>
 									<p className="job-meta">
-										{organization?.name} ·{" "}
-										{allEvaluations.length} submission
-										{allEvaluations.length === 1 ? "" : "s"}{" "}
-										evaluated
+										{selectedJob.confirmed
+											? "Requirements confirmed"
+											: "Requirements need confirmation"}
+										<span aria-hidden> · </span>
+										{applicationStatus(selectedJob)}
+										<span aria-hidden> · </span>
+										{requirements.length} criteria
 									</p>
 								</div>
 								<div className="job-actions">
-									<Button
-										onClick={() => setIsWindowOpen(true)}
-										size="sm"
-										variant="outline"
-									>
-										Application window
-									</Button>
-									<select
-										aria-label="Invitation validity"
-										className="workspace-filter-select"
-										onChange={(event) =>
-											setInviteHours(
-												Number(event.target.value),
-											)
-										}
-										value={inviteHours}
-									>
-										<option value={24}>
-											Invite valid 24 h
-										</option>
-										<option value={168}>
-											Invite valid 7 days
-										</option>
-										<option value={720}>
-											Invite valid 30 days
-										</option>
-									</select>
-									<Button
-										onClick={() =>
+									<ShareMenu
+										copied={copiedInvitation}
+										invitation={invitation}
+										inviteHours={inviteHours}
+										isCreating={isCreatingInvitation}
+										job={selectedJob}
+										onCopyLink={copyInvitationLink}
+										onCreateInvitation={() =>
 											void handleCreateInvitation()
 										}
-										size="sm"
-										variant="outline"
-									>
-										<LinkIcon />
-										Invite candidate
-									</Button>
+										onEditWindow={() =>
+											setIsWindowOpen(true)
+										}
+										setInviteHours={setInviteHours}
+									/>
 									<Button
 										onClick={() => setActiveTab("upload")}
 										size="sm"
 									>
 										<UploadCloud />
-										Queue resumes
+										Add resumes
 									</Button>
 								</div>
 							</div>
 
-							{invitation && (
-								<div className="invitation-strip">
-									<div className="invitation-facts">
-										<span>
-											Link{" "}
-											<code>{`${window.location.origin}/apply/${invitation.token}`}</code>
-										</span>
-										<span>
-											Passcode{" "}
-											<code className="passcode">
-												{invitation.passcode}
-											</code>
-										</span>
-										<span className="muted-copy">
-											expires{" "}
-											{new Date(
-												invitation.expiresAt,
-											).toLocaleString()}
-										</span>
-									</div>
-									<Button
-										onClick={copyInvitationLink}
-										size="sm"
-										variant="outline"
-									>
-										<Copy />
-										{copiedInvitation
-											? "Copied"
-											: "Copy link"}
-									</Button>
-								</div>
-							)}
-
-							<nav aria-label="Job sections" className="job-tabs">
+							{activeTab === "upload" ? (
 								<button
-									className={`job-tab${
-										activeTab === "results" ? " active" : ""
-									}`}
+									className="back-link"
 									onClick={() => setActiveTab("results")}
 									type="button"
 								>
-									Top matches ({evaluations.length})
+									<ArrowLeft aria-hidden />
+									Back to results
 								</button>
-								<button
-									className={`job-tab${
-										activeTab === "criteria"
-											? " active"
-											: ""
-									}`}
-									onClick={() => setActiveTab("criteria")}
-									type="button"
+							) : (
+								<nav
+									aria-label="Job sections"
+									className="job-tabs"
 								>
-									Criteria ({requirements.length})
-								</button>
-								<button
-									className={`job-tab${
-										activeTab === "upload" ? " active" : ""
-									}`}
-									onClick={() => setActiveTab("upload")}
-									type="button"
-								>
-									Upload
-								</button>
-							</nav>
-
-							{activeTab === "results" && (
-								<ResultsTab
-									evaluations={allEvaluations}
-									eligibilityFilter={eligibilityFilter}
-									exportCsv={() => setIsExportOpen(true)}
-									minimumScoreText={minimumScoreText}
-									onInspect={setInspectingEvaluation}
-									onQueue={() => setActiveTab("upload")}
-									visibleEvaluations={visibleEvaluations}
-									setEligibilityFilter={setEligibilityFilter}
-									setEvaluationQuery={setEvaluationQuery}
-									setMinimumScoreText={setMinimumScoreText}
-									setOutcomeFilter={setOutcomeFilter}
-									setSkillFilter={setSkillFilter}
-									setStatusFilter={setStatusFilter}
-									evaluationQuery={evaluationQuery}
-									outcomeFilter={outcomeFilter}
-									skillFilter={skillFilter}
-									statusFilter={statusFilter}
-								/>
+									<button
+										aria-current={
+											activeTab === "results"
+												? "page"
+												: undefined
+										}
+										className="job-tab"
+										onClick={() => setActiveTab("results")}
+										type="button"
+									>
+										Results
+										<span>{allEvaluations.length}</span>
+									</button>
+									<button
+										aria-current={
+											activeTab === "criteria"
+												? "page"
+												: undefined
+										}
+										className="job-tab"
+										onClick={() => setActiveTab("criteria")}
+										type="button"
+									>
+										Criteria
+										<span>{requirements.length}</span>
+									</button>
+								</nav>
 							)}
 
+							{activeTab === "results" &&
+								evaluationsJobId !== selectedJob.id && (
+									<p
+										className="empty-state loading-inline"
+										role="status"
+									>
+										<ThinkingOrb
+											aria-hidden
+											size={20}
+											state="solving"
+										/>
+										Loading results...
+									</p>
+								)}
+							{activeTab === "results" &&
+								evaluationsJobId === selectedJob.id && (
+									<ResultsTab
+										allEvaluations={allEvaluations}
+										eligibilityFilter={eligibilityFilter}
+										evaluationQuery={evaluationQuery}
+										exportCsv={() => setIsExportOpen(true)}
+										minimumScoreText={minimumScoreText}
+										onAddResumes={() =>
+											setActiveTab("upload")
+										}
+										onSelect={(evaluation) =>
+											setSelectedEvaluationId(
+												evaluation.id,
+											)
+										}
+										outcomeFilter={outcomeFilter}
+										selectedEvaluation={selectedEvaluation}
+										setEligibilityFilter={
+											setEligibilityFilter
+										}
+										setEvaluationQuery={setEvaluationQuery}
+										setMinimumScoreText={
+											setMinimumScoreText
+										}
+										setOutcomeFilter={setOutcomeFilter}
+										setSkillFilter={setSkillFilter}
+										setStatusFilter={setStatusFilter}
+										skillFilter={skillFilter}
+										statusFilter={statusFilter}
+										visibleEvaluations={visibleEvaluations}
+									/>
+								)}
 							{activeTab === "criteria" && (
 								<CriteriaTab
 									canConfirm={
@@ -913,21 +879,6 @@ export const Workspace = () => {
 					onDismiss={() => setIsExportOpen(false)}
 					onError={reportError}
 				/>
-			)}
-
-			{inspectingEvaluation && (
-				<div
-					{...overlayBackdrop({
-						labelledBy: "evidence-title",
-						onDismiss: () => setInspectingEvaluation(null),
-					})}
-					className="drawer-backdrop"
-				>
-					<EvidenceDrawer
-						evaluation={inspectingEvaluation}
-						onClose={() => setInspectingEvaluation(null)}
-					/>
-				</div>
 			)}
 		</div>
 	);

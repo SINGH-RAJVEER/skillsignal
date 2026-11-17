@@ -5,6 +5,7 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -28,6 +29,34 @@ type TourContextValue = {
 };
 
 const storageKey = "skillsignal-demo-tour";
+const PANEL_GAP = 12;
+const VIEWPORT_MARGIN = 16;
+const COMPACT_VIEWPORT = 560;
+
+type PanelPosition = { top: number; left: number };
+
+// Places the panel beside its target so it never covers what it describes.
+// Returns null when neither side has room; the panel then docks to a corner.
+const positionNear = (
+	target: HTMLElement,
+	panel: HTMLElement,
+): PanelPosition | null => {
+	if (window.innerWidth <= COMPACT_VIEWPORT) return null;
+	const rect = target.getBoundingClientRect();
+	const { offsetWidth: width, offsetHeight: height } = panel;
+	const left = Math.min(
+		Math.max(rect.left, VIEWPORT_MARGIN),
+		window.innerWidth - width - VIEWPORT_MARGIN,
+	);
+	if (
+		rect.bottom + PANEL_GAP + height <=
+		window.innerHeight - VIEWPORT_MARGIN
+	)
+		return { top: rect.bottom + PANEL_GAP, left };
+	if (rect.top - PANEL_GAP - height >= VIEWPORT_MARGIN)
+		return { top: rect.top - PANEL_GAP - height, left };
+	return null;
+};
 const TourContext = createContext<TourContextValue | null>(null);
 
 const readTour = (): TourState | null => {
@@ -60,6 +89,11 @@ export const DemoTourProvider = ({ children }: { children: ReactNode }) => {
 	const { data: session, isPending } = authClient.useSession();
 	const [tour, setTour] = useState<TourState | null>(null);
 	const [transitionError, setTransitionError] = useState<string | null>(null);
+	const [activeTarget, setActiveTarget] = useState<HTMLElement | null>(null);
+	const [panelPosition, setPanelPosition] = useState<PanelPosition | null>(
+		null,
+	);
+	const panelRef = useRef<HTMLElement>(null);
 	const actions = useRef(new Map<string, () => void | Promise<void>>());
 	const switchingAct = useRef(false);
 	const currentSteps = tour ? DEMO_STEPS[tour.act] : [];
@@ -111,6 +145,7 @@ export const DemoTourProvider = ({ children }: { children: ReactNode }) => {
 				});
 		};
 		clearTarget();
+		setActiveTarget(null);
 		const findTarget = () =>
 			document.querySelector<HTMLElement>(
 				`[data-tour="${currentStep.target}"]`,
@@ -149,6 +184,7 @@ export const DemoTourProvider = ({ children }: { children: ReactNode }) => {
 			if (target) {
 				target.setAttribute("data-demo-tour-active", "true");
 				target.scrollIntoView({ block: "center", behavior: "smooth" });
+				setActiveTarget(target);
 				return;
 			}
 			if (targetWaits < maximumTargetWaits) {
@@ -180,6 +216,29 @@ export const DemoTourProvider = ({ children }: { children: ReactNode }) => {
 			clearTarget();
 		};
 	}, [currentStep]);
+
+	useLayoutEffect(() => {
+		const panel = panelRef.current;
+		if (!activeTarget || !panel) {
+			setPanelPosition(null);
+			return;
+		}
+		let frame = 0;
+		const update = () => {
+			cancelAnimationFrame(frame);
+			frame = requestAnimationFrame(() =>
+				setPanelPosition(positionNear(activeTarget, panel)),
+			);
+		};
+		setPanelPosition(positionNear(activeTarget, panel));
+		window.addEventListener("resize", update);
+		window.addEventListener("scroll", update, true);
+		return () => {
+			cancelAnimationFrame(frame);
+			window.removeEventListener("resize", update);
+			window.removeEventListener("scroll", update, true);
+		};
+	}, [activeTarget]);
 
 	useEffect(() => {
 		if (!tour) return;
@@ -271,7 +330,13 @@ export const DemoTourProvider = ({ children }: { children: ReactNode }) => {
 		<TourContext.Provider value={contextValue}>
 			{children}
 			{tour && currentStep && (
-				<section aria-label="Guided demo" className="demo-tour-panel">
+				<section
+					aria-label="Guided demo"
+					className="demo-tour-panel"
+					data-docked={panelPosition ? undefined : "true"}
+					ref={panelRef}
+					style={panelPosition ?? undefined}
+				>
 					<div className="demo-tour-copy">
 						<p className="eyebrow">
 							{tour.act === "employer"
