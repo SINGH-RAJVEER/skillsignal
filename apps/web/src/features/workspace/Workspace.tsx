@@ -55,6 +55,8 @@ export const Workspace = () => {
 	const [searchParams, setSearchParams] = useSearchParams();
 	const { data: session, isPending } = authClient.useSession();
 	const [organization, setOrganization] = useState<Organization | null>(null);
+	const [organizationsLoaded, setOrganizationsLoaded] = useState(false);
+	const [jobsLoaded, setJobsLoaded] = useState(false);
 	const organizationId = organization?.id ?? "";
 	const [jobs, setJobs] = useState<Job[]>([]);
 	const [jobSearch, setJobSearch] = useState("");
@@ -94,7 +96,7 @@ export const Workspace = () => {
 	const [minimumScoreText, setMinimumScoreText] = useState(
 		searchParams.get("minimum_score") ?? "",
 	);
-	const [pendingCount, setPendingCount] = useState(0);
+	const [allEvaluations, setAllEvaluations] = useState<Evaluation[]>([]);
 	const [isExportOpen, setIsExportOpen] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -171,14 +173,12 @@ export const Workspace = () => {
 
 	const refreshEvaluations = useCallback(
 		async (jobId: string) => {
-			const [results, pending] = await Promise.all([
+			const [results, everything] = await Promise.all([
 				workspaceClient.evaluations(jobId, evaluationFilters),
-				workspaceClient.evaluations(jobId, {
-					status: ["pending", "processing"],
-				}),
+				workspaceClient.evaluations(jobId),
 			]);
 			setEvaluations(results);
-			setPendingCount(pending.length);
+			setAllEvaluations(everything);
 		},
 		[evaluationFilters],
 	);
@@ -212,7 +212,8 @@ export const Workspace = () => {
 		void workspaceClient
 			.organizations()
 			.then((records) => setOrganization(records[0] ?? null))
-			.catch(reportError);
+			.catch(reportError)
+			.finally(() => setOrganizationsLoaded(true));
 	}, [session?.user, reportError]);
 
 	useEffect(() => {
@@ -227,17 +228,26 @@ export const Workspace = () => {
 				const firstJob = list[0];
 				if (firstJob) await openJob(firstJob);
 			})
-			.catch(reportError);
+			.catch(reportError)
+			.finally(() => setJobsLoaded(true));
 	}, [organizationId, openJob, reportError]);
 
-	useEffect(() => {
-		if (!selectedJob) return;
-		void refreshEvaluations(selectedJob.id).catch(reportError);
-	}, [selectedJob, refreshEvaluations, reportError]);
+	const selectedJobId = selectedJob?.id;
+	// A confirmed version is locked, so its draft can no longer change even
+	// when no extraction result was ever stored for it.
+	const isDraftExtracting =
+		selectedJob !== null &&
+		!selectedJob.confirmed &&
+		selectedJob.draftStatus === "processing";
 
 	useEffect(() => {
-		if (selectedJob?.draftStatus !== "processing") return;
-		const jobId = selectedJob.id;
+		if (!selectedJobId) return;
+		void refreshEvaluations(selectedJobId).catch(reportError);
+	}, [selectedJobId, refreshEvaluations, reportError]);
+
+	useEffect(() => {
+		if (!selectedJobId || !isDraftExtracting) return;
+		const jobId = selectedJobId;
 		const interval = window.setInterval(() => {
 			void workspaceClient
 				.job(jobId)
@@ -256,26 +266,24 @@ export const Workspace = () => {
 				.catch(() => {});
 		}, 1_500);
 		return () => window.clearInterval(interval);
-	}, [selectedJob]);
+	}, [selectedJobId, isDraftExtracting]);
 
 	// Terminal states never change, so polling must stop once every
 	// evaluation is complete or failed.
-	const hasPendingEvaluations =
-		pendingCount > 0 ||
-		evaluations.some(
-			(evaluation) =>
-				evaluation.status === "pending" ||
-				evaluation.status === "processing",
-		);
+	const hasPendingEvaluations = allEvaluations.some(
+		(evaluation) =>
+			evaluation.status === "pending" ||
+			evaluation.status === "processing",
+	);
 
 	useEffect(() => {
-		if (!selectedJob || !hasPendingEvaluations) return;
-		const jobId = selectedJob.id;
+		if (!selectedJobId || !hasPendingEvaluations) return;
+		const jobId = selectedJobId;
 		const interval = window.setInterval(() => {
 			void refreshEvaluations(jobId).catch(() => {});
 		}, 3_000);
 		return () => window.clearInterval(interval);
-	}, [selectedJob, hasPendingEvaluations, refreshEvaluations]);
+	}, [selectedJobId, hasPendingEvaluations, refreshEvaluations]);
 
 	const overlayOpen =
 		isCreateOrgOpen ||
@@ -293,7 +301,10 @@ export const Workspace = () => {
 		return () => window.removeEventListener("keydown", onKeyDown);
 	}, [overlayOpen, closeOverlays]);
 
-	const showDemoResults = useCallback(() => setActiveTab("results"), []);
+	const showDemoResults = useCallback(() => {
+		setEligibilityFilter("all");
+		setActiveTab("results");
+	}, []);
 	const showDemoEvidence = useCallback(() => {
 		setActiveTab("results");
 		const example =
@@ -610,8 +621,8 @@ export const Workspace = () => {
 									</div>
 									<p className="job-meta">
 										{organization?.name} ·{" "}
-										{evaluations.length} submission
-										{evaluations.length === 1 ? "" : "s"}{" "}
+										{allEvaluations.length} submission
+										{allEvaluations.length === 1 ? "" : "s"}{" "}
 										evaluated
 									</p>
 								</div>
@@ -730,7 +741,7 @@ export const Workspace = () => {
 
 							{activeTab === "results" && (
 								<ResultsTab
-									evaluations={evaluations}
+									evaluations={allEvaluations}
 									eligibilityFilter={eligibilityFilter}
 									exportCsv={() => setIsExportOpen(true)}
 									minimumScoreText={minimumScoreText}
@@ -806,6 +817,16 @@ export const Workspace = () => {
 								/>
 							)}
 						</div>
+					) : !organizationsLoaded ||
+						(organizationId && !jobsLoaded) ? (
+						<p className="empty-state loading-inline" role="status">
+							<ThinkingOrb
+								aria-hidden
+								size={20}
+								state="solving"
+							/>
+							Loading roles...
+						</p>
 					) : (
 						<div className="empty-state">
 							<Briefcase aria-hidden />

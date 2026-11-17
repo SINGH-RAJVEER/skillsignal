@@ -21,7 +21,7 @@ export const DEMO_STEPS: Record<DemoAct, DemoTourStep[]> = {
 		},
 		{
 			title: "Evaluation results",
-			body: "The seeded submissions show eligible, needs review, and not eligible outcomes with their evidence-backed scores.",
+			body: "The seeded submissions include an eligible result and one that needs review, each with an evidence-backed score.",
 			target: "employer-results",
 			action: "employer-results",
 		},
