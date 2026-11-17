@@ -54,7 +54,7 @@ export const StructureFlow = () => {
 
 		const material = new THREE.PointsMaterial({
 			size: POINT_SIZE,
-			color: 0x111111,
+			color: 0xf2f2f2,
 			transparent: true,
 			opacity: OPACITY,
 			depthWrite: false,

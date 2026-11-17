@@ -10,7 +10,7 @@ const DEPTH = 1000;
 const FOV = 300;
 const SPEED = 1.1;
 const TRAIL_FADE = 0.4;
-const INK_TONES = ["17, 17, 17", "128, 128, 128"];
+const INK_TONES = ["242, 242, 242", "128, 128, 128"];
 
 class Particle {
 	x = 0;
@@ -36,7 +36,7 @@ class Particle {
 		this.tone =
 			INK_TONES[Math.random() > 0.5 ? 0 : 1] ??
 			INK_TONES[0] ??
-			"17, 17, 17";
+			"242, 242, 242";
 		this.length = Math.random() * 2 + 0.5;
 	}
 
@@ -98,7 +98,7 @@ export const ParticleField = () => {
 
 		const animate = () => {
 			frame = requestAnimationFrame(animate);
-			ctx.fillStyle = `rgba(255, 255, 255, ${TRAIL_FADE})`;
+			ctx.fillStyle = `rgba(10, 10, 10, ${TRAIL_FADE})`;
 			ctx.fillRect(0, 0, width, height);
 			for (const particle of particles) {
 				particle.update();
