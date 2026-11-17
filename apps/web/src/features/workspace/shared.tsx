@@ -19,6 +19,9 @@ export type Invitation = {
 
 export type WindowStatus = { label: string; className: string };
 
+// Open-ended application windows are stored with a far-future close date.
+const OPEN_ENDED_YEAR = 2099;
+
 export const applicationStatus = (job: JobDetail): WindowStatus => {
 	if (!job.applicationOpensAt || !job.applicationClosesAt) {
 		return {
@@ -40,6 +43,9 @@ export const applicationStatus = (job: JobDetail): WindowStatus => {
 			label: "applications closed",
 			className: "status-chip chip-muted",
 		};
+	}
+	if (new Date(closes).getUTCFullYear() >= OPEN_ENDED_YEAR) {
+		return { label: "always open", className: "status-chip chip-solid" };
 	}
 	return {
 		label: `open until ${new Date(closes).toLocaleDateString()}`,
