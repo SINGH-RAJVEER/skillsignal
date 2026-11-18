@@ -167,7 +167,6 @@ export const ResultsTab = ({
 				/>
 				<ToggleGroup
 					aria-label="Filter by eligibility"
-					className="eligibility-toggle"
 					onValueChange={(value) => {
 						if (value)
 							setEligibilityFilter(value as EligibilityFilter);

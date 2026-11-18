@@ -1,26 +1,51 @@
 import { Button } from "@skillsignal/ui/components/button";
-import { ClipboardCheck, FileSearch } from "lucide-react";
 import { useCallback, useState } from "react";
 import { CandidateSubmissionWorkspace } from "../features/candidate/CandidateSubmissionWorkspace";
-import { PrivateEvaluationWorkspace } from "../features/candidate/PrivateEvaluationWorkspace";
+import {
+	type CandidateView,
+	PrivateEvaluationWorkspace,
+} from "../features/candidate/PrivateEvaluationWorkspace";
 import { useDemoTourAction } from "../features/tour/DemoTour";
 import { authClient } from "../lib/auth-client";
 
-type CandidateTask = "private-check" | "job-submission";
+const VIEWS: Array<{ value: CandidateView; label: string }> = [
+	{ value: "check", label: "Check" },
+	{ value: "history", label: "History" },
+	{ value: "submissions", label: "Submissions" },
+];
 
 export const CandidateHome = () => {
 	const { data: session } = authClient.useSession();
-	const [task, setTask] = useState<CandidateTask>("private-check");
-	const showReceipts = useCallback(() => setTask("job-submission"), []);
+	const [view, setView] = useState<CandidateView>("check");
+	const showReceipts = useCallback(() => setView("submissions"), []);
 	useDemoTourAction("candidate-receipts", showReceipts);
 
 	return (
 		<main className="candidate-page">
 			<header className="candidate-header">
-				<div className="brand-mark">
-					<img src="/icon.webp" alt="SkillSignal" />
+				<div className="candidate-header-left">
+					<div className="brand-mark">
+						<img src="/icon.webp" alt="SkillSignal" />
+					</div>
+					<nav
+						aria-label="Candidate sections"
+						className="candidate-nav"
+					>
+						{VIEWS.map((item) => (
+							<button
+								aria-current={
+									view === item.value ? "page" : undefined
+								}
+								key={item.value}
+								onClick={() => setView(item.value)}
+								type="button"
+							>
+								{item.label}
+							</button>
+						))}
+					</nav>
 				</div>
-				<div>
+				<div className="candidate-header-right">
 					<span>{session?.user.name}</span>
 					<Button
 						onClick={() => authClient.signOut()}
@@ -32,45 +57,16 @@ export const CandidateHome = () => {
 				</div>
 			</header>
 
-			<section className="candidate-content">
-				<header className="candidate-intro">
-					<p className="eyebrow">Candidate workspace</p>
-					<h1>Your resume stays yours.</h1>
-					<p>
-						Check it privately, or send one document to an employer
-						who gave you an application passcode.
-					</p>
-				</header>
-
-				<nav
-					aria-label="Candidate tasks"
-					className="candidate-task-nav"
-					data-tour="candidate-tasks"
-				>
-					<Button
-						aria-pressed={task === "private-check"}
-						onClick={() => setTask("private-check")}
-						variant="ghost"
-					>
-						<FileSearch />
-						Private resume check
-					</Button>
-					<Button
-						aria-pressed={task === "job-submission"}
-						onClick={() => setTask("job-submission")}
-						variant="ghost"
-					>
-						<ClipboardCheck />
-						Employer submission
-					</Button>
-				</nav>
-
-				{task === "private-check" ? (
-					<PrivateEvaluationWorkspace />
-				) : (
+			<div className="candidate-content">
+				{view === "submissions" ? (
 					<CandidateSubmissionWorkspace />
+				) : (
+					<PrivateEvaluationWorkspace
+						onViewChange={setView}
+						view={view}
+					/>
 				)}
-			</section>
+			</div>
 		</main>
 	);
 };

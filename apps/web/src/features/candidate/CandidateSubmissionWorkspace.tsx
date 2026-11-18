@@ -1,13 +1,14 @@
 import { Button } from "@skillsignal/ui/components/button";
 import { Input } from "@skillsignal/ui/components/input";
 import { Label } from "@skillsignal/ui/components/label";
-import { CheckCircle2, KeyRound, UploadCloud } from "lucide-react";
+import { CheckCircle2, UploadCloud } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { ThinkingOrb } from "thinking-orbs";
 import {
 	candidateClient,
 	type SubmissionReceipt as ReceiptRecord,
 } from "./client";
+import { FileDrop } from "./FileDrop";
 
 type RedeemedInvitation = {
 	jobId: string;
@@ -110,18 +111,15 @@ export const CandidateSubmissionWorkspace = () => {
 
 	return (
 		<section
-			className="candidate-submission"
+			className="candidate-section"
 			aria-labelledby="submission-title"
 		>
-			<header className="candidate-action-heading">
-				<KeyRound aria-hidden />
-				<div>
-					<h2 id="submission-title">Submit to an employer</h2>
-					<p>
-						Use the single-use passcode from the employer. You will
-						not see their evaluation here.
-					</p>
-				</div>
+			<header className="candidate-section-head">
+				<h1 id="submission-title">Submit to an employer</h1>
+				<p>
+					Use the single-use passcode from the employer. You will not
+					see their evaluation here.
+				</p>
 			</header>
 
 			{receipt ? (
@@ -157,20 +155,14 @@ export const CandidateSubmissionWorkspace = () => {
 						<Label htmlFor="submission-resume">
 							Resume document
 						</Label>
-						<Input
+						<FileDrop
 							accept=".pdf,.docx,.txt"
+							file={resume}
+							hint="PDF, DOCX, or TXT up to 20 MB"
 							id="submission-resume"
-							onChange={(event) =>
-								setResume(
-									event.currentTarget.files?.[0] ?? null,
-								)
-							}
-							required
-							type="file"
+							onFile={setResume}
+							prompt="Drop your resume here"
 						/>
-						<p className="form-hint">
-							PDF, DOCX, or TXT. Maximum 20 MB.
-						</p>
 					</div>
 					<Button disabled={!resume || isSubmitting} type="submit">
 						{isSubmitting ? (
@@ -249,9 +241,14 @@ export const CandidateSubmissionWorkspace = () => {
 					</p>
 				</header>
 				{isLoadingReceipts ? (
-					<p className="candidate-empty" role="status">
-						Loading your submission receipts...
-					</p>
+					<div
+						aria-label="Loading your submission receipts"
+						className="list-skeleton"
+						role="status"
+					>
+						<span />
+						<span />
+					</div>
 				) : receiptError ? (
 					<p className="form-error" role="alert">
 						{receiptError}

@@ -1,7 +1,10 @@
 import { Button } from "@skillsignal/ui/components/button";
-import { Input } from "@skillsignal/ui/components/input";
 import { Label } from "@skillsignal/ui/components/label";
 import { Textarea } from "@skillsignal/ui/components/textarea";
+import {
+	ToggleGroup,
+	ToggleGroupItem,
+} from "@skillsignal/ui/components/toggle-group";
 import { AlertTriangle, FileDown, FileSearch, Trash2 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { ThinkingOrb } from "thinking-orbs";
@@ -13,6 +16,7 @@ import {
 	type IndependentEvaluation,
 	type PointPack,
 } from "./client";
+import { FileDrop } from "./FileDrop";
 
 const PROCESSING_STEPS = [
 	"Reading the document",
@@ -33,7 +37,17 @@ const reportScoreLabel = (evaluation: IndependentEvaluation) => {
 	return score === null ? evaluation.status : `${score}/100`;
 };
 
-export const PrivateEvaluationWorkspace = () => {
+export type CandidateView = "check" | "history" | "submissions";
+
+type PrivateEvaluationWorkspaceProps = {
+	view: "check" | "history";
+	onViewChange: (view: CandidateView) => void;
+};
+
+export const PrivateEvaluationWorkspace = ({
+	view,
+	onViewChange,
+}: PrivateEvaluationWorkspaceProps) => {
 	const [isWorking, setIsWorking] = useState(false);
 	const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -43,7 +57,7 @@ export const PrivateEvaluationWorkspace = () => {
 	const [jobDescriptionFile, setJobDescriptionFile] = useState<File | null>(
 		null,
 	);
-	const [fileInputKey, setFileInputKey] = useState(0);
+	const [jobSource, setJobSource] = useState<"paste" | "upload">("paste");
 	const [privateEvaluation, setPrivateEvaluation] =
 		useState<IndependentEvaluation | null>(null);
 	const [privateHistory, setPrivateHistory] = useState<
@@ -125,7 +139,6 @@ export const PrivateEvaluationWorkspace = () => {
 			setPrivateResume(null);
 			setJobDescription("");
 			setJobDescriptionFile(null);
-			setFileInputKey((key) => key + 1);
 			setShowPurchase(false);
 			refreshPoints();
 		} catch (reason) {
@@ -146,20 +159,24 @@ export const PrivateEvaluationWorkspace = () => {
 		}
 	};
 
-	const openPrivateEvaluation = useCallback(async (evaluationId: string) => {
-		setError(null);
-		try {
-			setPrivateEvaluation(
-				await candidateClient.independentEvaluation(evaluationId),
-			);
-		} catch (reason) {
-			setError(
-				reason instanceof Error
-					? reason.message
-					: "Report could not be opened",
-			);
-		}
-	}, []);
+	const openPrivateEvaluation = useCallback(
+		async (evaluationId: string) => {
+			setError(null);
+			try {
+				setPrivateEvaluation(
+					await candidateClient.independentEvaluation(evaluationId),
+				);
+				onViewChange("check");
+			} catch (reason) {
+				setError(
+					reason instanceof Error
+						? reason.message
+						: "Report could not be opened",
+				);
+			}
+		},
+		[onViewChange],
+	);
 	const showSeededReport = useCallback(async () => {
 		try {
 			const history = await candidateClient.independentEvaluations();
@@ -168,6 +185,7 @@ export const PrivateEvaluationWorkspace = () => {
 				history.find((item) => item.status === "complete") ??
 				history[0];
 			if (evaluation) setPrivateEvaluation(evaluation);
+			onViewChange("check");
 		} catch (reason) {
 			setError(
 				reason instanceof Error
@@ -175,8 +193,11 @@ export const PrivateEvaluationWorkspace = () => {
 					: "The seeded private report could not be loaded.",
 			);
 		}
-	}, []);
-	const showHistory = useCallback(() => setPrivateEvaluation(null), []);
+	}, [onViewChange]);
+	const showHistory = useCallback(
+		() => onViewChange("history"),
+		[onViewChange],
+	);
 	useDemoTourAction("candidate-report", showSeededReport);
 	useDemoTourAction("candidate-history", showHistory);
 
@@ -202,143 +223,19 @@ export const PrivateEvaluationWorkspace = () => {
 		}
 	};
 
-	return (
-		<div className="candidate-workspace">
+	if (view === "history") {
+		return (
 			<section
-				className="candidate-primary"
-				aria-labelledby="private-check-title"
-			>
-				<header className="candidate-action-heading">
-					<FileSearch aria-hidden />
-					<div>
-						<h2 id="private-check-title">Private resume check</h2>
-						<p>
-							Add a job description only when you want
-							role-specific guidance.
-						</p>
-					</div>
-				</header>
-
-				{privateEvaluation ? (
-					<PrivateReport
-						evaluation={privateEvaluation}
-						onClose={() => setPrivateEvaluation(null)}
-					/>
-				) : (
-					<form
-						className="candidate-form"
-						onSubmit={startPrivateEvaluation}
-					>
-						<BillingStrip points={points} quote={quote} />
-						<div className="form-field">
-							<Label htmlFor="private-resume">
-								Resume document
-							</Label>
-							<Input
-								accept=".pdf,.docx,.txt"
-								id="private-resume"
-								key={`resume-${fileInputKey}`}
-								onChange={(event) =>
-									setPrivateResume(
-										event.currentTarget.files?.[0] ?? null,
-									)
-								}
-								required
-								type="file"
-							/>
-							<p className="form-hint">
-								PDF, DOCX, or TXT. Maximum 20 MB.
-							</p>
-						</div>
-						<div className="form-field">
-							<Label htmlFor="job-description">
-								Job description, optional
-							</Label>
-							<Textarea
-								disabled={Boolean(jobDescriptionFile)}
-								id="job-description"
-								onChange={(event) =>
-									setJobDescription(event.currentTarget.value)
-								}
-								placeholder="Paste the role description"
-								value={jobDescription}
-							/>
-							<div className="candidate-file-alternative">
-								<span>or upload it</span>
-								<Input
-									accept=".pdf,.docx,.txt,.md,.markdown,.html,.htm"
-									id="job-description-file"
-									key={`job-${fileInputKey}`}
-									onChange={(event) => {
-										const selected =
-											event.currentTarget.files?.[0] ??
-											null;
-										setJobDescriptionFile(selected);
-										if (selected) setJobDescription("");
-									}}
-									type="file"
-								/>
-							</div>
-							<p className="form-hint">
-								PDF, DOCX, TXT, Markdown, or HTML. Maximum 10
-								MB.
-							</p>
-						</div>
-						<Button
-							disabled={!privateResume || isWorking}
-							type="submit"
-						>
-							{isWorking ? (
-								<ThinkingOrb
-									aria-hidden
-									size={20}
-									state="solving"
-								/>
-							) : (
-								<FileSearch aria-hidden />
-							)}
-							{isWorking ? "Starting check" : "Check resume"}
-						</Button>
-					</form>
-				)}
-				{error && (
-					<p className="form-error" role="alert">
-						{error}
-					</p>
-				)}
-				{showPurchase && (
-					<PackPurchase
-						onPurchased={() => {
-							setShowPurchase(false);
-							setError(null);
-							refreshPoints();
-						}}
-						packs={packs}
-					/>
-				)}
-				{!showPurchase &&
-					points &&
-					points.allowance?.freeUsedThisWeek && (
-						<p className="form-hint">
-							<Button
-								onClick={() => setShowPurchase(true)}
-								size="sm"
-								variant="outline"
-							>
-								Buy points
-							</Button>
-						</p>
-					)}
-			</section>
-
-			<aside
-				className="candidate-history"
 				aria-labelledby="history-title"
+				className="candidate-section"
 				data-tour="candidate-history"
 			>
-				<header>
-					<p className="eyebrow">Private archive</p>
-					<h2 id="history-title">Previous checks</h2>
+				<header className="candidate-section-head">
+					<h1 id="history-title">Previous checks</h1>
+					<p>
+						Reports stay private to you. Delete any report and its
+						files.
+					</p>
 				</header>
 				{historyError && (
 					<div className="candidate-empty" role="alert">
@@ -355,10 +252,7 @@ export const PrivateEvaluationWorkspace = () => {
 					</div>
 				)}
 				{isLoadingHistory ? (
-					<p className="candidate-empty loading-inline" role="status">
-						<ThinkingOrb aria-hidden size={20} state="solving" />
-						Loading your checks...
-					</p>
+					<ListSkeleton label="Loading your checks" />
 				) : historyIsUnavailable ? null : privateHistory.length ===
 					0 ? (
 					<p className="candidate-empty">
@@ -367,12 +261,7 @@ export const PrivateEvaluationWorkspace = () => {
 				) : (
 					<ul className="candidate-history-list">
 						{privateHistory.map((evaluation) => (
-							<li
-								data-active={
-									privateEvaluation?.id === evaluation.id
-								}
-								key={evaluation.id}
-							>
+							<li key={evaluation.id}>
 								{confirmDeleteId === evaluation.id ? (
 									<div className="history-confirm-delete">
 										<p>Delete this report and its files?</p>
@@ -419,18 +308,18 @@ export const PrivateEvaluationWorkspace = () => {
 												{evaluation.originalName}
 											</span>
 											<span className="history-meta">
-												{reportScoreLabel(evaluation)}
+												{evaluation.jobDescriptionProvided
+													? "With job description"
+													: "General resume check"}
 												{" · "}
 												{new Date(
 													evaluation.createdAt,
 												).toLocaleDateString()}
 											</span>
-											{evaluation.jobDescriptionProvided && (
-												<small>
-													Job description included
-												</small>
-											)}
 										</button>
+										<strong className="history-score">
+											{reportScoreLabel(evaluation)}
+										</strong>
 										<Button
 											aria-label={`Delete ${evaluation.originalName}`}
 											onClick={() =>
@@ -449,10 +338,236 @@ export const PrivateEvaluationWorkspace = () => {
 						))}
 					</ul>
 				)}
-			</aside>
-		</div>
+			</section>
+		);
+	}
+
+	if (privateEvaluation) {
+		return (
+			<PrivateReport
+				evaluation={privateEvaluation}
+				onClose={() => setPrivateEvaluation(null)}
+			/>
+		);
+	}
+
+	const recentChecks = privateHistory.slice(0, 3);
+
+	return (
+		<section
+			aria-labelledby="private-check-title"
+			className="candidate-section"
+		>
+			<header className="candidate-section-head">
+				<h1 id="private-check-title">Check your resume</h1>
+				<p>
+					Private to you. Add a job description for
+					criterion-by-criterion feedback.
+				</p>
+			</header>
+
+			<form className="check-steps" onSubmit={startPrivateEvaluation}>
+				<div className="check-step">
+					<span aria-hidden className="check-step-index">
+						1
+					</span>
+					<div className="form-field">
+						<Label htmlFor="private-resume">Resume</Label>
+						<FileDrop
+							accept=".pdf,.docx,.txt"
+							file={privateResume}
+							hint="PDF, DOCX, or TXT up to 20 MB"
+							id="private-resume"
+							onFile={setPrivateResume}
+							prompt="Drop your resume here"
+						/>
+					</div>
+				</div>
+
+				<div className="check-step">
+					<span aria-hidden className="check-step-index">
+						2
+					</span>
+					<div className="form-field">
+						<div className="check-step-label">
+							<Label
+								htmlFor={
+									jobSource === "paste"
+										? "job-description"
+										: "job-description-file"
+								}
+							>
+								Job description <span>optional</span>
+							</Label>
+							<ToggleGroup
+								aria-label="Job description source"
+								onValueChange={(value) => {
+									if (value !== "paste" && value !== "upload")
+										return;
+									setJobSource(value);
+									setJobDescription("");
+									setJobDescriptionFile(null);
+								}}
+								size="sm"
+								type="single"
+								value={jobSource}
+								variant="outline"
+							>
+								<ToggleGroupItem value="paste">
+									Paste
+								</ToggleGroupItem>
+								<ToggleGroupItem value="upload">
+									Upload file
+								</ToggleGroupItem>
+							</ToggleGroup>
+						</div>
+						{jobSource === "paste" ? (
+							<Textarea
+								id="job-description"
+								onChange={(event) =>
+									setJobDescription(event.currentTarget.value)
+								}
+								placeholder="Paste the role description"
+								rows={6}
+								value={jobDescription}
+							/>
+						) : (
+							<FileDrop
+								accept=".pdf,.docx,.txt,.md,.markdown,.html,.htm"
+								file={jobDescriptionFile}
+								hint="PDF, DOCX, TXT, Markdown, or HTML up to 10 MB"
+								id="job-description-file"
+								onFile={setJobDescriptionFile}
+								prompt="Drop the job description here"
+							/>
+						)}
+					</div>
+				</div>
+
+				<div className="check-step">
+					<span
+						aria-hidden
+						className="check-step-index check-step-final"
+					>
+						3
+					</span>
+					<div className="form-field">
+						<Button
+							className="w-full"
+							disabled={!privateResume || isWorking}
+							size="lg"
+							type="submit"
+						>
+							{isWorking ? (
+								<ThinkingOrb
+									aria-hidden
+									size={20}
+									state="solving"
+								/>
+							) : (
+								<FileSearch aria-hidden />
+							)}
+							{isWorking ? "Starting check" : "Run private check"}
+						</Button>
+						<BillingStrip points={points} quote={quote} />
+					</div>
+				</div>
+			</form>
+
+			{error && (
+				<p className="form-error" role="alert">
+					{error}
+				</p>
+			)}
+			{showPurchase && (
+				<PackPurchase
+					onPurchased={() => {
+						setShowPurchase(false);
+						setError(null);
+						refreshPoints();
+					}}
+					packs={packs}
+				/>
+			)}
+			{!showPurchase && points?.allowance?.freeUsedThisWeek && (
+				<Button
+					className="justify-self-start"
+					onClick={() => setShowPurchase(true)}
+					size="sm"
+					variant="outline"
+				>
+					Buy points
+				</Button>
+			)}
+
+			<section aria-labelledby="recent-title" className="recent-checks">
+				<div className="recent-checks-head">
+					<h2 id="recent-title">Recent checks</h2>
+					{privateHistory.length > recentChecks.length && (
+						<Button
+							onClick={() => onViewChange("history")}
+							size="sm"
+							variant="ghost"
+						>
+							View all
+						</Button>
+					)}
+				</div>
+				{isLoadingHistory ? (
+					<ListSkeleton label="Loading your checks" />
+				) : recentChecks.length === 0 ? (
+					<p className="candidate-empty">
+						Your private reports will appear here.
+					</p>
+				) : (
+					<ul className="recent-list">
+						{recentChecks.map((evaluation) => (
+							<li key={evaluation.id}>
+								<button
+									onClick={() =>
+										void openPrivateEvaluation(
+											evaluation.id,
+										)
+									}
+									type="button"
+								>
+									<span>{evaluation.originalName}</span>
+									<span className="history-meta">
+										{new Date(
+											evaluation.createdAt,
+										).toLocaleDateString()}
+										{" · "}
+										<strong>
+											{reportScoreLabel(evaluation)}
+										</strong>
+									</span>
+								</button>
+							</li>
+						))}
+					</ul>
+				)}
+			</section>
+
+			<p className="passcode-prompt">
+				Have an application passcode from an employer?{" "}
+				<button
+					onClick={() => onViewChange("submissions")}
+					type="button"
+				>
+					Submit your resume
+				</button>
+			</p>
+		</section>
 	);
 };
+
+const ListSkeleton = ({ label }: { label: string }) => (
+	<div aria-label={label} className="list-skeleton" role="status">
+		<span />
+		<span />
+		<span />
+	</div>
+);
 
 const ProcessingState = () => {
 	const [stepIndex, setStepIndex] = useState(0);
