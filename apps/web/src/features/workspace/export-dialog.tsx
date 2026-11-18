@@ -85,6 +85,7 @@ export const ExportDialog = ({
 							<span className="export-column-index">
 								{index + 1}
 							</span>
+							<code className="export-column-name">{column}</code>
 							<Input
 								aria-label={`Rename ${column}`}
 								onChange={(event) =>
@@ -93,7 +94,7 @@ export const ExportDialog = ({
 										[column]: event.target.value,
 									}))
 								}
-								placeholder={column}
+								placeholder="Header (optional)"
 								value={labels[column] ?? ""}
 							/>
 							<Button

@@ -17,11 +17,11 @@ export const DEMO_STEPS: Record<DemoAct, DemoTourStep[]> = {
 		{
 			title: "A confirmed role",
 			body: "This role has a confirmed version of its requirements. Every submission is evaluated against that version.",
-			target: "employer-role",
+			target: "employer-job",
 		},
 		{
 			title: "Evaluation results",
-			body: "The seeded submissions show eligible, needs review, and not eligible outcomes with their evidence-backed scores.",
+			body: "The seeded submissions include an eligible result and one that needs review, each with an evidence-backed score.",
 			target: "employer-results",
 			action: "employer-results",
 		},
@@ -32,8 +32,8 @@ export const DEMO_STEPS: Record<DemoAct, DemoTourStep[]> = {
 		},
 		{
 			title: "Inspect evidence",
-			body: "Open a result to see the resume excerpts behind each requirement assessment.",
-			target: "employer-evidence-drawer",
+			body: "Select a candidate to read the resume excerpts behind each requirement assessment.",
+			target: "employer-evidence",
 			action: "employer-evidence",
 		},
 		{
